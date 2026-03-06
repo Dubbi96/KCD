@@ -1,0 +1,22 @@
+aws_region     = "ap-northeast-2"
+project_name   = "katab"
+environment    = "dev"
+vpc_cidr       = "10.0.0.0/16"
+
+# RDS
+db_username        = "katab"
+db_password        = "CHANGE_ME_IN_PRODUCTION"
+db_name            = "katab_orchestrator"
+rds_instance_class = "db.t3.micro"
+
+# Redis
+redis_node_type = "cache.t3.micro"
+
+# ECS
+ecs_cpu           = 512
+ecs_memory        = 1024
+ecs_desired_count = 1
+
+# Security
+jwt_secret      = "CHANGE_ME_IN_PRODUCTION"
+certificate_arn = ""

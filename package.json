@@ -1,0 +1,27 @@
+{
+  "name": "katab-platform",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "cloud-orchestrator",
+    "local-runner",
+    "dashboard"
+  ],
+  "scripts": {
+    "cloud:dev": "npm -w cloud-orchestrator run start:dev",
+    "cloud:build": "npm -w cloud-orchestrator run build",
+    "cloud:start": "npm -w cloud-orchestrator run start:prod",
+    "runner:setup": "npm -w local-runner run setup --",
+    "runner:dev": "npm -w local-runner run start:dev",
+    "runner:build": "npm -w local-runner run build",
+    "runner:start": "npm -w local-runner run start",
+    "dashboard:dev": "npm -w dashboard run dev",
+    "dashboard:build": "npm -w dashboard run build",
+    "db:migrate": "npm -w cloud-orchestrator run migration:run",
+    "infra:plan": "cd infra/terraform && terraform plan",
+    "infra:apply": "cd infra/terraform && terraform apply"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
