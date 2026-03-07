@@ -12,14 +12,32 @@ import { ConfigService } from '@nestjs/config';
 export class ControlPlaneService {
   private readonly logger = new Logger('ControlPlaneService');
   private readonly kcpBaseUrl: string;
+  private readonly serviceToken: string;
 
   constructor(config: ConfigService) {
     this.kcpBaseUrl = config.get('KCP_API_URL', 'http://localhost:4100/api');
+    this.serviceToken = config.get('KCP_SERVICE_TOKEN', '');
   }
 
-  private async request(path: string): Promise<any> {
+  private buildHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (this.serviceToken) {
+      headers['X-Service-Token'] = this.serviceToken;
+    }
+    return headers;
+  }
+
+  private async request(path: string, method = 'GET', body?: any): Promise<any> {
     try {
-      const res = await fetch(`${this.kcpBaseUrl}${path}`);
+      const opts: RequestInit = {
+        method,
+        headers: this.buildHeaders(),
+      };
+      if (body) opts.body = JSON.stringify(body);
+
+      const res = await fetch(`${this.kcpBaseUrl}${path}`, opts);
       if (!res.ok) return null;
       return await res.json();
     } catch (e: any) {
@@ -28,50 +46,24 @@ export class ControlPlaneService {
     }
   }
 
-  /**
-   * Customer-facing capacity summary: available slots and devices per platform.
-   * Hides internal node details — customers see abstract capacity.
-   */
   async getCapacity(tenantId?: string): Promise<any> {
     const query = tenantId ? `?tenantId=${tenantId}` : '';
     return this.request(`/resources/capacity${query}`);
   }
 
-  /**
-   * Full cluster pool overview (admin/operational view).
-   */
   async getPoolOverview(): Promise<any> {
     return this.request('/resources/pool');
   }
 
-  /**
-   * List all registered nodes.
-   */
   async getNodes(): Promise<any> {
     return this.request('/nodes');
   }
 
-  /**
-   * Get specific node details.
-   */
   async getNodeDetail(nodeId: string): Promise<any> {
     return this.request(`/resources/nodes/${nodeId}`);
   }
 
-  /**
-   * Initiate node drain via KCP.
-   */
   async drainNode(nodeId: string): Promise<any> {
-    try {
-      const res = await fetch(`${this.kcpBaseUrl}/nodes/${nodeId}/drain`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch (e: any) {
-      this.logger.warn(`KCP drain request failed: ${e.message}`);
-      return null;
-    }
+    return this.request(`/nodes/${nodeId}/drain`, 'POST');
   }
 }
