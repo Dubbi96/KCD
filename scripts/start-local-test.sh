@@ -8,6 +8,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+KRC_DIR="$(cd "$ROOT_DIR/../KRC" && pwd)"
 
 echo "============================================"
 echo "  Katab Platform — Local Test Setup"
@@ -88,8 +89,8 @@ npm run build 2>/dev/null || true
 npm run migration:run 2>&1 | tail -2
 
 echo ""
-echo "[2.5/5] Local Runner — install dependencies..."
-cd "$ROOT_DIR/local-runner"
+echo "[2.5/5] Local Runner (KRC) — install dependencies..."
+cd "$KRC_DIR"
 npm install --silent
 npx playwright install chromium 2>/dev/null || echo "  (Playwright chromium install skipped)"
 
