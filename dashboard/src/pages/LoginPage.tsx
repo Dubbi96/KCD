@@ -48,6 +48,7 @@ export default function LoginPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@katab.io"
                 className="w-full px-3 py-2 bg-card2 border border-border rounded-lg text-white text-sm placeholder-muted/50 focus:ring-1 focus:ring-accent focus:border-accent outline-none transition-colors"
                 required
               />
@@ -59,6 +60,7 @@ export default function LoginPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                placeholder="password123"
                 className="w-full px-3 py-2 bg-card2 border border-border rounded-lg text-white text-sm placeholder-muted/50 focus:ring-1 focus:ring-accent focus:border-accent outline-none transition-colors"
                 required
               />

@@ -8,7 +8,7 @@ import { ControlPlaneService } from './control-plane.service';
  * All resource state comes from KCP — KCD does not compute it.
  */
 @ApiTags('Control Plane')
-@Controller('v1/control-plane')
+@Controller('control-plane')
 @UseGuards(AuthGuard('jwt'))
 @ApiBearerAuth()
 export class ControlPlaneController {

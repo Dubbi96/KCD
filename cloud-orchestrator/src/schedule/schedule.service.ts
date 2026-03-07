@@ -146,8 +146,8 @@ export class ScheduleService {
       .createQueryBuilder('pr')
       .leftJoinAndSelect('pr.schedule', 'schedule')
       .where('pr.status = :status', { status: 'PLANNED' })
-      .andWhere('pr.planned_at <= :now', { now })
-      .orderBy('pr.planned_at', 'ASC')
+      .andWhere('pr.plannedAt <= :now', { now })
+      .orderBy('pr.plannedAt', 'ASC')
       .take(100)
       .getMany();
 

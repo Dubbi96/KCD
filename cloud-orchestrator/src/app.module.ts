@@ -34,7 +34,7 @@ import { ControlPlaneModule } from './control-plane/control-plane.module';
         database: config.get('DB_DATABASE', 'katab_orchestrator'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
         synchronize: false,
-        logging: config.get('NODE_ENV') === 'development',
+        logging: config.get('NODE_ENV') === 'development' ? ['error', 'warn', 'schema', 'migration'] : false,
       }),
     }),
     DatabaseModule,

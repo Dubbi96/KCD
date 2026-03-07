@@ -22,7 +22,7 @@ export class AuthService {
 
   async signUp(dto: SignUpDto) {
     const existing = await this.userRepo.findOne({ where: { email: dto.email } });
-    if (existing) throw new ConflictException('Email already registered');
+    if (existing) throw new ConflictException('이미 등록된 이메일입니다.');
 
     const slug = dto.tenantName
       .toLowerCase()
@@ -52,13 +52,20 @@ export class AuthService {
 
   async signIn(dto: SignInDto) {
     const user = await this.userRepo.findOne({
-      where: { email: dto.email, isActive: true },
+      where: { email: dto.email },
       relations: ['tenant'],
     });
-    if (!user) throw new UnauthorizedException('Invalid credentials');
+    if (!user) {
+      throw new UnauthorizedException('등록되지 않은 이메일입니다. 회원가입을 진행해주세요.');
+    }
+    if (!user.isActive) {
+      throw new UnauthorizedException('비활성화된 계정입니다. 관리자에게 문의해주세요.');
+    }
 
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
-    if (!valid) throw new UnauthorizedException('Invalid credentials');
+    if (!valid) {
+      throw new UnauthorizedException('비밀번호가 올바르지 않습니다.');
+    }
 
     const token = this.generateToken(user);
     return {
