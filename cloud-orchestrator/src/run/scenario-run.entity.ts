@@ -34,6 +34,9 @@ export class ScenarioRun {
   @Column({ default: 1 })
   attempt: number;
 
+  @Column({ name: 'kcp_job_id', type: 'uuid', nullable: true })
+  kcpJobId: string;
+
   @Column({ name: 'worker_id', nullable: true })
   workerId: string;
 

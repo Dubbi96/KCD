@@ -5,6 +5,7 @@ import { Device } from './device.entity';
 import { DeviceSession } from './device-session.entity';
 import { Runner } from '../account/runner.entity';
 import { CreateDeviceSessionDto } from './dto/create-session.dto';
+import { ControlPlaneService } from '../control-plane/control-plane.service';
 
 @Injectable()
 export class DeviceService {
@@ -14,6 +15,7 @@ export class DeviceService {
     @InjectRepository(Device) private deviceRepo: Repository<Device>,
     @InjectRepository(DeviceSession) private sessionRepo: Repository<DeviceSession>,
     @InjectRepository(Runner) private runnerRepo: Repository<Runner>,
+    private cpService: ControlPlaneService,
   ) {}
 
   // ─── Device Resource Pool ───────────────────────────
@@ -109,42 +111,52 @@ export class DeviceService {
   // ─── Device Listing ─────────────────────────────────
 
   /**
-   * List all registered devices for a tenant.
+   * List all devices from KCP (source of truth for device inventory).
+   * KRC reports devices to KCP via heartbeat — KCP is account-independent.
+   * KCD enriches with runner info for borrow/session operations.
    */
   async listDevices(tenantId: string) {
-    const devices = await this.deviceRepo.find({
-      where: { tenantId },
-      order: { platform: 'ASC', name: 'ASC' },
-    });
+    // 1) Get devices from KCP (account-independent, all nodes)
+    const kcpDevices: any[] = await this.cpService.getDevices();
 
-    // Enrich with runner info
-    const runnerIds = [...new Set(devices.map((d) => d.runnerId))];
-    const runners =
-      runnerIds.length > 0
-        ? await this.runnerRepo.find({ where: { id: In(runnerIds) } })
-        : [];
-    const runnerMap = new Map(runners.map((r) => [r.id, r]));
+    // 2) Get all tenant runners to map KCP nodes → KCD runners for borrow
+    const runners = await this.runnerRepo.find({ where: { tenantId } });
 
-    return devices.map((d) => {
-      const runner = runnerMap.get(d.runnerId);
-      const isOnline =
-        runner?.lastHeartbeatAt &&
-        Date.now() - new Date(runner.lastHeartbeatAt).getTime() < 90_000;
+    // Build nodeHost:port → runner mapping from runner metadata
+    const runnerByHost = new Map<string, Runner>();
+    for (const r of runners) {
+      const meta = r.metadata as any;
+      if (meta?.localApiHost && meta?.localApiPort) {
+        runnerByHost.set(`${meta.localApiHost}:${meta.localApiPort}`, r);
+      }
+    }
+
+    // 3) Get KCP nodes to map nodeId → host:port
+    const nodes: any[] = (await this.cpService.getNodes()) || [];
+    const nodeMap = new Map(nodes.map((n: any) => [n.id, n]));
+
+    return kcpDevices.map((d: any) => {
+      const node = nodeMap.get(d.nodeId);
+      const hostKey = node ? `${node.host}:${node.port}` : '';
+      const runner = runnerByHost.get(hostKey);
+      const isOnline = node?.status === 'online';
+
       return {
         id: d.id,
         deviceUdid: d.deviceUdid,
         platform: d.platform,
         name: d.name,
-        model: d.model,
-        version: d.version,
+        model: d.model || d.osVersion,
+        version: d.osVersion,
         status: isOnline ? d.status : 'offline',
-        borrowedBy: d.borrowedBy,
-        borrowedAt: d.borrowedAt,
-        activeSessionId: d.activeSessionId,
+        borrowedBy: d.tenantId === tenantId ? d.tenantId : null,
+        borrowedAt: null,
+        activeSessionId: null,
         lastSeenAt: d.lastSeenAt,
-        runnerId: d.runnerId,
-        runnerName: runner?.name,
+        runnerId: runner?.id,
+        runnerName: runner?.name || node?.name,
         runnerOnline: !!isOnline,
+        nodeId: d.nodeId,
       };
     });
   }
@@ -155,34 +167,48 @@ export class DeviceService {
    * Borrow a device: mark it as in_use and create a mirror session.
    */
   async borrowDevice(tenantId: string, userId: string, dto: CreateDeviceSessionDto) {
-    // Find the device in our pool
-    const device = await this.deviceRepo.findOne({
-      where: { id: dto.deviceId, tenantId },
-    });
-    if (!device) throw new NotFoundException('Device not found in resource pool');
+    // 1) Find device from KCP (source of truth)
+    const kcpDevices: any[] = await this.cpService.getDevices();
+    const kcpDevice = kcpDevices.find((d: any) => d.id === dto.deviceId);
+    if (!kcpDevice) throw new NotFoundException('Device not found in resource pool');
 
-    // Check availability
-    if (device.status === 'in_use') {
+    if (kcpDevice.status === 'leased') {
       throw new BadRequestException('Device is already borrowed by another user');
     }
-    if (device.status === 'offline') {
+    if (kcpDevice.status === 'offline') {
       throw new BadRequestException('Device is offline — runner may be disconnected');
     }
 
-    // Find runner
-    const runner = await this.runnerRepo.findOne({
-      where: { id: device.runnerId, tenantId },
+    // 2) Get node info from KCP to find runner host:port
+    const nodes: any[] = (await this.cpService.getNodes()) || [];
+    const node = nodes.find((n: any) => n.id === kcpDevice.nodeId);
+    if (!node || node.status !== 'online') {
+      throw new BadRequestException('Node hosting this device is offline');
+    }
+
+    // 3) Find the KCD runner that matches this KCP node (by host:port)
+    const runners = await this.runnerRepo.find({ where: { tenantId } });
+    let runner = runners.find((r) => {
+      const meta = r.metadata as any;
+      return meta?.localApiHost === node.host && meta?.localApiPort === node.port;
     });
-    if (!runner) throw new NotFoundException('Runner not found');
 
-    const isOnline =
-      runner.lastHeartbeatAt &&
-      Date.now() - new Date(runner.lastHeartbeatAt).getTime() < 90_000;
-    if (!isOnline) throw new BadRequestException('Runner is offline');
+    // Fallback: find any online runner in tenant (for KCD-spawned runners)
+    if (!runner) {
+      runner = runners.find(
+        (r) => r.lastHeartbeatAt && Date.now() - new Date(r.lastHeartbeatAt).getTime() < 90_000,
+      );
+    }
+    if (!runner) throw new BadRequestException('No runner available for this tenant. Create a runner first.');
 
-    // Use the device's actual platform, not the runner's nominal platform
-    // (runners support all platforms — web, ios, android)
-    const platform = device.platform;
+    const platform = kcpDevice.platform;
+    // Construct a device-like object for the rest of the flow
+    const device = {
+      deviceUdid: kcpDevice.deviceUdid,
+      runnerId: runner.id,
+      platform,
+      status: kcpDevice.status,
+    } as any;
     const rc = dto.recordingConfig || {};
     const deviceType = dto.deviceType || rc.deviceType;
 
@@ -215,14 +241,7 @@ export class DeviceService {
     });
     await this.sessionRepo.save(session);
 
-    // 2) Mark device as in_use
-    device.status = 'in_use';
-    device.borrowedBy = userId;
-    device.borrowedAt = new Date();
-    device.activeSessionId = session.id;
-    await this.deviceRepo.save(device);
-
-    // 3) Call runner to create the actual session (Appium/Playwright)
+    // 2) Call runner to create the actual session (Appium/Playwright)
     try {
       const runnerUrl = this.getRunnerUrl(runner);
       this.logger.log(
@@ -233,7 +252,7 @@ export class DeviceService {
       try {
         res = await fetch(`${runnerUrl}/sessions`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: this.getRunnerHeaders(runner),
           body: JSON.stringify({
             platform,
             deviceId: device.deviceUdid,
@@ -254,13 +273,17 @@ export class DeviceService {
           fetchErr.cause?.code === 'ECONNREFUSED'
             ? ` — runner process may not be running on ${runnerUrl}`
             : '';
-        await this.failBorrow(session, device, `Cannot reach runner: ${fetchErr.message}${hint}`);
+        session.status = 'error';
+        session.errorMessage = `Cannot reach runner: ${fetchErr.message}${hint}`;
+        await this.sessionRepo.save(session).catch(() => {});
         throw new BadRequestException(session.errorMessage);
       }
 
       if (!res.ok) {
         const text = await res.text();
-        await this.failBorrow(session, device, `Runner returned ${res.status}: ${text.slice(0, 500)}`);
+        session.status = 'error';
+        session.errorMessage = `Runner returned ${res.status}: ${text.slice(0, 500)}`;
+        await this.sessionRepo.save(session).catch(() => {});
         throw new BadRequestException(session.errorMessage);
       }
 
@@ -270,34 +293,19 @@ export class DeviceService {
       session.deviceName = `${platform}:${device.deviceUdid.slice(0, 12)}`;
       if (runnerSession.status === 'error') {
         session.errorMessage = 'Session failed on runner';
-        device.status = 'available';
-        (device as any).borrowedBy = null;
-        (device as any).borrowedAt = null;
-        (device as any).activeSessionId = null;
-        await this.deviceRepo.save(device);
       }
       await this.sessionRepo.save(session);
 
       this.logger.log(`Device borrowed: ${device.deviceUdid} → session ${session.id}`);
     } catch (err: any) {
       if (err instanceof BadRequestException) throw err;
-      await this.failBorrow(session, device, err.message);
+      session.status = 'error';
+      session.errorMessage = err.message;
+      await this.sessionRepo.save(session).catch(() => {});
       throw new BadRequestException(`Failed to borrow device: ${err.message}`);
     }
 
     return session;
-  }
-
-  private async failBorrow(session: DeviceSession, device: Device, errorMessage: string) {
-    session.status = 'error';
-    session.errorMessage = errorMessage;
-    await this.sessionRepo.save(session).catch(() => {});
-
-    device.status = 'available';
-    (device as any).borrowedBy = null;
-    (device as any).borrowedAt = null;
-    (device as any).activeSessionId = null;
-    await this.deviceRepo.save(device).catch(() => {});
   }
 
   /**
@@ -353,7 +361,7 @@ export class DeviceService {
 
       const res = await fetch(`${runnerUrl}/sessions`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getRunnerHeaders(onlineRunner),
         body: JSON.stringify({
           platform: 'web',
           url: dto.url,
@@ -406,6 +414,7 @@ export class DeviceService {
           const runnerUrl = this.getRunnerUrl(runner);
           await fetch(`${runnerUrl}/sessions/${session.runnerSessionId}`, {
             method: 'DELETE',
+            headers: this.getRunnerHeaders(runner),
             signal: AbortSignal.timeout(10_000),
           });
         }
@@ -418,18 +427,7 @@ export class DeviceService {
     session.closedAt = new Date();
     await this.sessionRepo.save(session);
 
-    // Release device back to pool
-    const device = await this.deviceRepo.findOne({
-      where: { runnerId: session.runnerId, deviceUdid: session.deviceId, tenantId },
-    });
-    if (device && device.activeSessionId === sessionId) {
-      device.status = 'available';
-      (device as any).borrowedBy = null;
-      (device as any).borrowedAt = null;
-      (device as any).activeSessionId = null;
-      await this.deviceRepo.save(device);
-      this.logger.log(`Device returned: ${device.deviceUdid}`);
-    }
+    this.logger.log(`Device session closed: ${session.deviceId}`);
 
     return session;
   }
@@ -500,6 +498,15 @@ export class DeviceService {
     const host = (runner.metadata as any)?.localApiHost || 'localhost';
     const port = (runner.metadata as any)?.localApiPort || 5001;
     return `http://${host}:${port}`;
+  }
+
+  /** Build headers for KCD → KRC calls (includes runner auth token) */
+  private getRunnerHeaders(runner: Runner): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (runner.apiToken) {
+      headers['Authorization'] = `Bearer ${runner.apiToken}`;
+    }
+    return headers;
   }
 
   private convertToKatabScenario(

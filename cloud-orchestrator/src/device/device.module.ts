@@ -8,12 +8,14 @@ import { DeviceController } from './device.controller';
 import { DeviceGateway } from './device.gateway';
 import { ScenarioModule } from '../scenario/scenario.module';
 import { AuthModule } from '../auth/auth.module';
+import { ControlPlaneModule } from '../control-plane/control-plane.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Device, DeviceSession, Runner]),
     ScenarioModule,
     AuthModule, // JwtModule needed for WebSocket auth in DeviceGateway
+    ControlPlaneModule,
   ],
   controllers: [DeviceController],
   providers: [DeviceService, DeviceGateway],

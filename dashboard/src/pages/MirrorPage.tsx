@@ -5,8 +5,20 @@ import {
   ArrowLeft, Wifi, WifiOff, Circle, Square, MousePointer, Type,
   ArrowUp, ArrowDown, Home, CornerDownLeft, Save, X, Image,
   RotateCw, ChevronLeft, ChevronRight, Keyboard, ExternalLink,
-  Globe, Layers,
+  Globe, Layers, Zap,
 } from 'lucide-react';
+
+/** Convert an ArrayBuffer to a base64 string (for rendering in <img> tags). */
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 8192;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+  }
+  return btoa(binary);
+}
 
 export default function MirrorPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
@@ -30,6 +42,17 @@ export default function MirrorPage() {
   const [saving, setSaving] = useState(false);
   const [mirrorFocused, setMirrorFocused] = useState(false);
 
+  // WebRTC state
+  const [webrtcAvailable, setWebrtcAvailable] = useState(false);
+  const [webrtcActive, setWebrtcActive] = useState(false);
+  const [webrtcState, setWebrtcState] = useState<string>('none');
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const framesChannelRef = useRef<RTCDataChannel | null>(null);
+  const controlChannelRef = useRef<RTCDataChannel | null>(null);
+  const iceServersRef = useRef<RTCIceServer[]>([]);
+  /** Chunked frame reassembly buffer */
+  const chunkBufferRef = useRef<{ chunks: Uint8Array[]; total: number }>({ chunks: [], total: 0 });
+
   // Page/popup tabs
   const [pages, setPages] = useState<{ id: string; title: string; url: string; isPopup?: boolean }[]>([]);
   const [activePageId, setActivePageId] = useState<string>('main');
@@ -47,6 +70,148 @@ export default function MirrorPage() {
     api.getDeviceSession(sessionId).then(setSession).catch(() => {});
   }, [sessionId]);
 
+  /** Handle incoming SDP offer from KRC (via cloud signaling relay) */
+  const handleSDPOffer = useCallback(async (offer: { sdp: string; type: string }) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    try {
+      // Clean up existing peer connection
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+
+      const pc = new RTCPeerConnection({
+        iceServers: iceServersRef.current,
+      });
+      pcRef.current = pc;
+
+      // Send ICE candidates to runner via cloud relay
+      pc.onicecandidate = (event) => {
+        if (event.candidate && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            event: 'ice_candidate',
+            data: {
+              candidate: event.candidate.candidate,
+              sdpMid: event.candidate.sdpMid,
+              sdpMLineIndex: event.candidate.sdpMLineIndex,
+            },
+          }));
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        setWebrtcState(pc.connectionState);
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+          setWebrtcActive(false);
+        }
+      };
+
+      // Handle DataChannels opened by the remote (KRC)
+      pc.ondatachannel = (event) => {
+        const channel = event.channel;
+
+        if (channel.label === 'frames') {
+          channel.binaryType = 'arraybuffer';
+          framesChannelRef.current = channel;
+
+          channel.onmessage = (msgEvent) => {
+            try {
+              const data = msgEvent.data as ArrayBuffer;
+              const bytes = new Uint8Array(data);
+
+              // Check if this is a chunked frame (has header) or a complete frame
+              // Chunked frames: first 4 bytes = [chunkIndex(u16), totalChunks(u16)]
+              // Complete PNG frames start with PNG signature: 0x89 0x50 0x4E 0x47
+              const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47;
+
+              if (isPng || data.byteLength > 4 && bytes[2] === 0 && bytes[3] === 1) {
+                // Single complete frame (not chunked, or totalChunks=1)
+                if (isPng) {
+                  // Raw PNG binary — convert to base64 for img display
+                  const base64 = arrayBufferToBase64(data);
+                  setFrame(base64);
+                  setFrameCount(c => c + 1);
+                } else {
+                  // totalChunks = 1, extract payload after 4-byte header
+                  const payload = bytes.slice(4);
+                  const base64 = arrayBufferToBase64(payload.buffer);
+                  setFrame(base64);
+                  setFrameCount(c => c + 1);
+                }
+              } else {
+                // Chunked frame — reassemble
+                const chunkIndex = (bytes[0] << 8) | bytes[1];
+                const totalChunks = (bytes[2] << 8) | bytes[3];
+                const payload = bytes.slice(4);
+
+                const buf = chunkBufferRef.current;
+                if (chunkIndex === 0) {
+                  // Start of new frame
+                  buf.chunks = new Array(totalChunks);
+                  buf.total = totalChunks;
+                }
+                buf.chunks[chunkIndex] = payload;
+
+                // Check if all chunks received
+                if (buf.chunks.length === buf.total && buf.chunks.every(c => c !== undefined)) {
+                  // Concatenate all chunks
+                  const totalSize = buf.chunks.reduce((sum, c) => sum + c.byteLength, 0);
+                  const full = new Uint8Array(totalSize);
+                  let offset = 0;
+                  for (const chunk of buf.chunks) {
+                    full.set(chunk, offset);
+                    offset += chunk.byteLength;
+                  }
+                  const base64 = arrayBufferToBase64(full.buffer);
+                  setFrame(base64);
+                  setFrameCount(c => c + 1);
+                  buf.chunks = [];
+                  buf.total = 0;
+                }
+              }
+            } catch {
+              // Frame decode error — skip
+            }
+          };
+
+          channel.onopen = () => {
+            setWebrtcActive(true);
+          };
+
+          channel.onclose = () => {
+            setWebrtcActive(false);
+            framesChannelRef.current = null;
+          };
+        }
+
+        if (channel.label === 'control') {
+          controlChannelRef.current = channel;
+          channel.onclose = () => {
+            controlChannelRef.current = null;
+          };
+        }
+      };
+
+      // Set remote description (the offer from KRC)
+      await pc.setRemoteDescription(new RTCSessionDescription(offer as RTCSessionDescriptionInit));
+
+      // Create and send answer
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      ws.send(JSON.stringify({
+        event: 'sdp_answer',
+        data: { sdp: answer.sdp, type: answer.type },
+      }));
+
+    } catch (err: any) {
+      console.error('[webrtc] Failed to handle SDP offer:', err);
+      setWebrtcState('failed');
+    }
+  }, []);
+
   useEffect(() => {
     if (!sessionId) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -55,7 +220,7 @@ export default function MirrorPage() {
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
-    ws.onopen = () => { setWsConnected(true); ws.send(JSON.stringify({ event: 'join', data: { sessionId } })); };
+    ws.onopen = () => { setWsConnected(true); const token = localStorage.getItem('token'); ws.send(JSON.stringify({ event: 'join', data: { sessionId, token } })); };
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
@@ -68,13 +233,47 @@ export default function MirrorPage() {
           case 'pages':
             setPages(msg.data || []);
             break;
+          // ── WebRTC signaling ──
+          case 'webrtc_available':
+            setWebrtcAvailable(msg.data?.available || false);
+            if (msg.data?.iceServers) {
+              iceServersRef.current = msg.data.iceServers;
+            }
+            break;
+          case 'sdp_offer':
+            handleSDPOffer(msg.data);
+            break;
+          case 'ice_candidate':
+            if (pcRef.current && msg.data) {
+              pcRef.current.addIceCandidate(new RTCIceCandidate(msg.data)).catch(() => {});
+            }
+            break;
+          case 'webrtc_active':
+            setWebrtcActive(msg.data === true);
+            break;
+          case 'webrtc_state':
+            setWebrtcState(msg.data || 'unknown');
+            break;
+          case 'webrtc_error':
+            console.warn('[webrtc] Error from runner:', msg.data);
+            setWebrtcState('failed');
+            break;
         }
       } catch {}
     };
-    ws.onclose = () => setWsConnected(false);
-    ws.onerror = () => setWsConnected(false);
-    return () => { ws.close(); };
-  }, [sessionId]);
+    ws.onclose = () => { setWsConnected(false); setWebrtcActive(false); };
+    ws.onerror = () => { setWsConnected(false); setWebrtcActive(false); };
+    return () => {
+      ws.close();
+      // Clean up WebRTC on unmount
+      if (pcRef.current) {
+        pcRef.current.close();
+        pcRef.current = null;
+      }
+      framesChannelRef.current = null;
+      controlChannelRef.current = null;
+    };
+  }, [sessionId, handleSDPOffer]);
 
   const sendWs = useCallback((msg: any) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -83,8 +282,22 @@ export default function MirrorPage() {
   }, []);
 
   const sendAction = useCallback((action: any) => {
+    // Prefer sending actions via WebRTC control DataChannel if available
+    const controlDc = controlChannelRef.current;
+    if (controlDc && controlDc.readyState === 'open') {
+      controlDc.send(JSON.stringify({ type: 'action', data: action }));
+      return;
+    }
+    // Fallback to WebSocket
     sendWs({ type: 'action', data: action });
   }, [sendWs]);
+
+  /** Request WebRTC upgrade from the runner */
+  const requestWebRTC = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    setWebrtcState('connecting');
+    wsRef.current.send(JSON.stringify({ event: 'webrtc_request', data: {} }));
+  }, []);
 
   // --- Switch page/popup ---
   const switchPage = useCallback((pageId: string) => {
@@ -267,6 +480,23 @@ export default function MirrorPage() {
             {isRecording && <span className="text-red-400 font-medium animate-pulse">REC</span>}
             {mirrorFocused && <span className="text-accent"><Keyboard size={10} className="inline mr-1" />Keyboard Active</span>}
           </div>
+          {/* WebRTC status + toggle */}
+          {wsConnected && webrtcAvailable && (
+            webrtcActive ? (
+              <span className="flex items-center gap-1 text-purple-400 text-xs" title={`WebRTC ${webrtcState}`}>
+                <Zap size={12} /> P2P
+              </span>
+            ) : (
+              <button
+                onClick={requestWebRTC}
+                disabled={webrtcState === 'connecting'}
+                className="flex items-center gap-1 text-muted text-xs hover:text-purple-400 transition-colors disabled:opacity-50"
+                title="Enable WebRTC for lower latency (direct P2P)"
+              >
+                <Zap size={12} /> {webrtcState === 'connecting' ? 'Connecting...' : 'Enable P2P'}
+              </button>
+            )
+          )}
           {wsConnected ? (
             <span className="flex items-center gap-1 text-green-400 text-xs"><Wifi size={12} /> Connected</span>
           ) : (
@@ -333,7 +563,7 @@ export default function MirrorPage() {
             {frame ? (
               <img
                 ref={imgRef}
-                src={`data:image/jpeg;base64,${frame}`}
+                src={`data:image/png;base64,${frame}`}
                 alt="Live screen"
                 className="w-full h-full object-contain cursor-crosshair select-none"
                 draggable={false}

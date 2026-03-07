@@ -66,4 +66,44 @@ export class ControlPlaneService {
   async drainNode(nodeId: string): Promise<any> {
     return this.request(`/nodes/${nodeId}/drain`, 'POST');
   }
+
+  // === Device queries (KCP is source of truth for device inventory) ===
+
+  async getDevices(filters?: { platform?: string; status?: string }): Promise<any[]> {
+    const params = new URLSearchParams();
+    if (filters?.platform) params.set('platform', filters.platform);
+    if (filters?.status) params.set('status', filters.status);
+    const query = params.toString() ? `?${params}` : '';
+    return (await this.request(`/devices${query}`)) || [];
+  }
+
+  async getAvailableDevices(platform: string): Promise<any[]> {
+    return (await this.request(`/devices/available?platform=${platform}`)) || [];
+  }
+
+  // === Job dispatch (KCD → KCP) ===
+
+  async createJob(params: {
+    tenantId: string;
+    runId: string;
+    scenarioRunId: string;
+    scenarioId: string;
+    platform: string;
+    payload: Record<string, any>;
+    priority?: number;
+  }): Promise<{ id: string } | null> {
+    return this.request('/jobs', 'POST', params);
+  }
+
+  async cancelJob(jobId: string): Promise<any> {
+    return this.request(`/jobs/${jobId}`, 'DELETE');
+  }
+
+  async getJobsByRun(runId: string): Promise<any[]> {
+    return (await this.request(`/jobs/run/${runId}`)) || [];
+  }
+
+  async getJobStats(): Promise<Record<string, Record<string, number>> | null> {
+    return this.request('/jobs/stats');
+  }
 }

@@ -47,10 +47,10 @@ export class RunService {
     }
     await this.scenarioRunRepo.save(scenarioRuns);
 
-    // Enqueue jobs to BullMQ (tenant-specific queue -> picked up by Runner)
+    // Dispatch jobs to KCP (Control Plane) — KRC nodes pull via SELECT FOR UPDATE SKIP LOCKED
     for (const sr of scenarioRuns) {
       if (sr.status === 'queued') {
-        await this.runQueueService.enqueueScenarioJob({
+        const kcpJobId = await this.runQueueService.enqueueScenarioJob({
           tenantId,
           scenarioRunId: sr.id,
           runId: run.id,
@@ -60,6 +60,10 @@ export class RunService {
           options: dto.options || {},
           attempt: 1,
         });
+        if (kcpJobId) {
+          sr.kcpJobId = kcpJobId;
+          await this.scenarioRunRepo.save(sr);
+        }
       }
     }
 
@@ -122,11 +126,11 @@ export class RunService {
         .where('id IN (:...ids)', { ids })
         .execute();
 
-      // Remove jobs from queues
+      // Cancel KCP jobs
       await Promise.allSettled(
-        cancellableSrs.map((sr) =>
-          this.runQueueService.removeJob(tenantId, sr.platform, sr.id),
-        ),
+        cancellableSrs
+          .filter((sr) => sr.kcpJobId)
+          .map((sr) => this.runQueueService.cancelJob(sr.kcpJobId)),
       );
     }
 
@@ -213,7 +217,7 @@ export class RunService {
 
     nextSr.status = 'queued';
     await this.scenarioRunRepo.save(nextSr);
-    await this.runQueueService.enqueueScenarioJob({
+    const kcpJobId = await this.runQueueService.enqueueScenarioJob({
       tenantId: run.tenantId,
       scenarioRunId: nextSr.id,
       runId: run.id,
@@ -223,6 +227,10 @@ export class RunService {
       options: run.options,
       attempt: 1,
     });
+    if (kcpJobId) {
+      nextSr.kcpJobId = kcpJobId;
+      await this.scenarioRunRepo.save(nextSr);
+    }
   }
 
   async pauseRun(tenantId: string, runId: string) {
@@ -236,15 +244,9 @@ export class RunService {
     );
 
     for (const sr of targetSrs) {
-      if (sr.status === 'running') {
-        await this.runQueueService.publishPauseControl({
-          action: 'kill',
-          scenarioRunId: sr.id,
-          tenantId,
-        });
-      }
-      if (sr.status === 'queued') {
-        await this.runQueueService.removeJob(tenantId, sr.platform, sr.id);
+      // Cancel the KCP job — KRC detects cancellation and stops execution
+      if (sr.kcpJobId) {
+        await this.runQueueService.cancelJob(sr.kcpJobId);
       }
       sr.status = 'paused';
       await this.scenarioRunRepo.save(sr);
@@ -266,7 +268,7 @@ export class RunService {
     for (const sr of pausedSrs) {
       sr.status = 'queued';
       await this.scenarioRunRepo.save(sr);
-      await this.runQueueService.enqueueScenarioJob({
+      const kcpJobId = await this.runQueueService.enqueueScenarioJob({
         tenantId,
         scenarioRunId: sr.id,
         runId: run.id,
@@ -276,6 +278,10 @@ export class RunService {
         options: run.options,
         attempt: sr.attempt,
       });
+      if (kcpJobId) {
+        sr.kcpJobId = kcpJobId;
+        await this.scenarioRunRepo.save(sr);
+      }
     }
 
     run.status = 'running';
@@ -292,15 +298,9 @@ export class RunService {
       throw new BadRequestException('Scenario run cannot be paused in its current state');
     }
 
-    if (sr.status === 'running') {
-      await this.runQueueService.publishPauseControl({
-        action: 'kill',
-        scenarioRunId: sr.id,
-        tenantId,
-      });
-    }
-    if (sr.status === 'queued') {
-      await this.runQueueService.removeJob(tenantId, sr.platform, sr.id);
+    // Cancel the KCP job — KRC detects cancellation and stops execution
+    if (sr.kcpJobId) {
+      await this.runQueueService.cancelJob(sr.kcpJobId);
     }
 
     sr.status = 'paused';
@@ -322,7 +322,7 @@ export class RunService {
 
     sr.status = 'queued';
     await this.scenarioRunRepo.save(sr);
-    await this.runQueueService.enqueueScenarioJob({
+    const kcpJobId = await this.runQueueService.enqueueScenarioJob({
       tenantId,
       scenarioRunId: sr.id,
       runId: run.id,
@@ -332,6 +332,10 @@ export class RunService {
       options: run.options,
       attempt: sr.attempt,
     });
+    if (kcpJobId) {
+      sr.kcpJobId = kcpJobId;
+      await this.scenarioRunRepo.save(sr);
+    }
     return sr;
   }
 

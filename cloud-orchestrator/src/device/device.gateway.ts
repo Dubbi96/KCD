@@ -13,6 +13,16 @@
  *   Cloud → Client:  { type: 'status', data: 'active' }
  *   Cloud → Client:  { type: 'recorded_events', data: [...] }
  *   Cloud → Client:  { type: 'error', data: '...' }
+ *
+ * WebRTC signaling (no frame relay — frames go direct P2P):
+ *   Client → Cloud:  { event: 'webrtc_request', data: {} }
+ *   Cloud → Client:  { type: 'sdp_offer', data: { sdp, type } }
+ *   Client → Cloud:  { event: 'sdp_answer', data: { sdp, type } }
+ *   Cloud ↔ Client:  { type: 'ice_candidate', data: { candidate, sdpMid, sdpMLineIndex } }
+ *   Cloud → Client:  { type: 'webrtc_available', data: { available, iceServers } }
+ *   Cloud → Client:  { type: 'webrtc_active', data: true/false }
+ *   Cloud → Client:  { type: 'webrtc_state', data: '...' }
+ *   Cloud → Client:  { type: 'webrtc_error', data: '...' }
  */
 
 import {
@@ -215,5 +225,54 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const link = this.runnerLinks.get(client);
     if (!link || link.ws.readyState !== WebSocket.OPEN) return;
     link.ws.send(JSON.stringify({ type: 'switch_page', data }));
+  }
+
+  // ── WebRTC Signaling Relay ──────────────────────────
+
+  /**
+   * Client requests WebRTC upgrade.
+   * Forward to the runner, which will create an SDP offer and send it back.
+   */
+  @SubscribeMessage('webrtc_request')
+  async handleWebRTCRequest(@ConnectedSocket() client: any) {
+    const link = this.runnerLinks.get(client);
+    if (!link || link.ws.readyState !== WebSocket.OPEN) {
+      this.sendToClient(client, 'webrtc_error', 'Not connected to runner');
+      return;
+    }
+    this.logger.log(`WebRTC request from client for session ${link.sessionId}`);
+    link.ws.send(JSON.stringify({ type: 'webrtc_request' }));
+  }
+
+  /**
+   * Client sends SDP answer (response to runner's SDP offer).
+   * Forward to the runner.
+   */
+  @SubscribeMessage('sdp_answer')
+  async handleSDPAnswer(
+    @ConnectedSocket() client: any,
+    @MessageBody() data: { sdp: string; type: string },
+  ) {
+    const link = this.runnerLinks.get(client);
+    if (!link || link.ws.readyState !== WebSocket.OPEN) {
+      this.sendToClient(client, 'webrtc_error', 'Not connected to runner');
+      return;
+    }
+    this.logger.log(`SDP answer relay for session ${link.sessionId}`);
+    link.ws.send(JSON.stringify({ type: 'sdp_answer', data }));
+  }
+
+  /**
+   * Client sends ICE candidate.
+   * Forward to the runner.
+   */
+  @SubscribeMessage('ice_candidate')
+  async handleICECandidate(
+    @ConnectedSocket() client: any,
+    @MessageBody() data: { candidate: string; sdpMid?: string; sdpMLineIndex?: number },
+  ) {
+    const link = this.runnerLinks.get(client);
+    if (!link || link.ws.readyState !== WebSocket.OPEN) return;
+    link.ws.send(JSON.stringify({ type: 'ice_candidate', data }));
   }
 }

@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Run } from './run.entity';
 import { ScenarioRun } from './scenario-run.entity';
 import { RunService } from './run.service';
@@ -14,26 +13,23 @@ import { ScenarioModule } from '../scenario/scenario.module';
 import { AuthProfileModule } from '../auth-profile/auth-profile.module';
 import { DeviceModule } from '../device/device.module';
 import { WebhookModule } from '../webhook/webhook.module';
+import { ControlPlaneModule } from '../control-plane/control-plane.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Run, ScenarioRun]),
-    ConfigModule,
     AccountModule,
     ScenarioModule,
     AuthProfileModule,
     DeviceModule,
     WebhookModule,
+    ControlPlaneModule,
   ],
   providers: [
     RunService,
     ReportService,
     ArtifactSweeperService,
-    {
-      provide: RunQueueService,
-      useFactory: (config: ConfigService) => new RunQueueService(config),
-      inject: [ConfigService],
-    },
+    RunQueueService,
   ],
   controllers: [RunController, RunnerCallbackController],
   exports: [RunService, RunQueueService],

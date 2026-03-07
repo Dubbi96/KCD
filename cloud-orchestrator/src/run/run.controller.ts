@@ -13,8 +13,8 @@ import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiBearerAuth, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { Response } from 'express';
 import { RunService } from './run.service';
-import { RunQueueService } from './run-queue.service';
 import { ReportService } from './report.service';
+import { ControlPlaneService } from '../control-plane/control-plane.service';
 import { CreateRunDto } from './dto/create-run.dto';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
@@ -25,8 +25,8 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 export class RunController {
   constructor(
     private runService: RunService,
-    private runQueueService: RunQueueService,
     private reportService: ReportService,
+    private controlPlane: ControlPlaneService,
   ) {}
 
   @Post()
@@ -53,45 +53,22 @@ export class RunController {
     return this.runService.getQueueStats(user.tenantId);
   }
 
-  @Get('queue/:platform/jobs')
-  @ApiOperation({ summary: 'List jobs in a queue by status' })
-  @ApiQuery({ name: 'status', required: false })
-  @ApiQuery({ name: 'start', required: false })
-  @ApiQuery({ name: 'end', required: false })
-  async getQueueJobs(
-    @CurrentUser() user: JwtPayload,
-    @Param('platform') platform: string,
-    @Query('status') status?: string,
-    @Query('start') start?: number,
-    @Query('end') end?: number,
+  @Get('jobs/:runId')
+  @ApiOperation({ summary: 'List KCP jobs for a run' })
+  async getJobsByRun(
+    @CurrentUser() _user: JwtPayload,
+    @Param('runId') runId: string,
   ) {
-    return this.runQueueService.getQueueJobs(
-      user.tenantId,
-      platform,
-      (status as any) || 'waiting',
-      start || 0,
-      end || 19,
-    );
+    return this.controlPlane.getJobsByRun(runId);
   }
 
-  @Post('queue/:platform/jobs/:jobId/retry')
-  @ApiOperation({ summary: 'Retry a failed job' })
-  async retryJob(
-    @CurrentUser() user: JwtPayload,
-    @Param('platform') platform: string,
+  @Delete('jobs/:jobId')
+  @ApiOperation({ summary: 'Cancel a KCP job' })
+  async cancelJob(
+    @CurrentUser() _user: JwtPayload,
     @Param('jobId') jobId: string,
   ) {
-    return this.runQueueService.retryJob(user.tenantId, platform, jobId);
-  }
-
-  @Delete('queue/:platform/jobs/:jobId')
-  @ApiOperation({ summary: 'Remove a job from queue' })
-  async removeJob(
-    @CurrentUser() user: JwtPayload,
-    @Param('platform') platform: string,
-    @Param('jobId') jobId: string,
-  ) {
-    await this.runQueueService.removeJob(user.tenantId, platform, jobId);
+    await this.controlPlane.cancelJob(jobId);
     return { ok: true };
   }
 

@@ -40,13 +40,13 @@ export class DeviceController {
   @Post('web-session')
   @ApiOperation({ summary: 'Start a web recording session (no device needed)' })
   async createWebSession(@Request() req: any, @Body() dto: CreateWebSessionDto) {
-    return this.deviceService.startWebSession(req.user.tenantId, req.user.id, dto);
+    return this.deviceService.startWebSession(req.user.tenantId, req.user.sub, dto);
   }
 
   @Post('sessions')
   @ApiOperation({ summary: 'Borrow a device and create a mirror/recording session' })
   async createSession(@Request() req: any, @Body() dto: CreateDeviceSessionDto) {
-    return this.deviceService.borrowDevice(req.user.tenantId, req.user.id, dto);
+    return this.deviceService.borrowDevice(req.user.tenantId, req.user.sub, dto);
   }
 
   @Get('sessions/:id')
