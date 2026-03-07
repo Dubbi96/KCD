@@ -14,6 +14,7 @@ import { FolderModule } from './folder/folder.module';
 import { GroupModule } from './group/group.module';
 import { StreamModule } from './stream/stream.module';
 import { TestDataModule } from './test-data/test-data.module';
+import { ControlPlaneModule } from './control-plane/control-plane.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { TestDataModule } from './test-data/test-data.module';
     GroupModule,
     StreamModule,
     TestDataModule,
+    ControlPlaneModule,
   ],
 })
 export class AppModule {}
