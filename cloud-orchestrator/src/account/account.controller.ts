@@ -34,19 +34,19 @@ export class AccountController {
   }
 
   @Post('runners')
-  @ApiOperation({ summary: 'Create a runner (auto-starts local process)' })
+  @ApiOperation({ summary: 'Register a runner (deploy KRC on target machine)' })
   createRunner(@CurrentUser() user: JwtPayload, @Body() dto: CreateRunnerDto) {
     return this.accountService.createRunner(user.tenantId, dto);
   }
 
   @Get('runners')
-  @ApiOperation({ summary: 'List all runners with process status' })
+  @ApiOperation({ summary: 'List all runners with heartbeat status' })
   listRunners(@CurrentUser() user: JwtPayload) {
     return this.accountService.listRunners(user.tenantId);
   }
 
   @Delete('runners/:runnerId')
-  @ApiOperation({ summary: 'Delete a runner (kills process)' })
+  @ApiOperation({ summary: 'Delete a runner registration' })
   deleteRunner(
     @CurrentUser() user: JwtPayload,
     @Param('runnerId') runnerId: string,
@@ -55,7 +55,7 @@ export class AccountController {
   }
 
   @Post('runners/:runnerId/start')
-  @ApiOperation({ summary: 'Start a stopped runner process' })
+  @ApiOperation({ summary: 'Get instructions to start KRC node agent' })
   startRunner(
     @CurrentUser() user: JwtPayload,
     @Param('runnerId') runnerId: string,
@@ -64,7 +64,7 @@ export class AccountController {
   }
 
   @Post('runners/:runnerId/stop')
-  @ApiOperation({ summary: 'Stop a running runner process' })
+  @ApiOperation({ summary: 'Mark runner as offline' })
   stopRunner(
     @CurrentUser() user: JwtPayload,
     @Param('runnerId') runnerId: string,
@@ -73,7 +73,7 @@ export class AccountController {
   }
 
   @Post('runners/:runnerId/restart')
-  @ApiOperation({ summary: 'Restart a runner process' })
+  @ApiOperation({ summary: 'Get instructions to restart KRC node agent' })
   restartRunner(
     @CurrentUser() user: JwtPayload,
     @Param('runnerId') runnerId: string,
@@ -82,7 +82,7 @@ export class AccountController {
   }
 
   @Get('runners/processes')
-  @ApiOperation({ summary: 'Get status of all runner processes' })
+  @ApiOperation({ summary: 'Get runner node status (KCP mode)' })
   getProcessStatus() {
     return this.accountService.getRunnerProcessStatus();
   }

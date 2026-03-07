@@ -37,6 +37,7 @@ export class AccountService {
   // === Runner Management ===
 
   private static readonly MAX_RUNNERS_PER_TENANT = 10;
+  private static readonly HEARTBEAT_TIMEOUT_MS = 90_000;
 
   async createRunner(tenantId: string, dto: CreateRunnerDto) {
     const count = await this.runnerRepo.count({ where: { tenantId } });
@@ -54,14 +55,10 @@ export class AccountService {
     });
     await this.runnerRepo.save(runner);
 
-    // Auto-spawn the local-runner process
-    try {
-      const port = await this.runnerProcess.spawnRunner(runner);
-      this.logger.log(`Runner "${runner.name}" spawned on port ${port}`);
-    } catch (e: any) {
-      this.logger.error(`Failed to auto-spawn runner: ${e.message}`);
-      // Runner is still created in DB — can be started manually later
-    }
+    this.logger.log(
+      `Runner "${runner.name}" created. ` +
+      `Deploy KRC on target machine with RUNNER_API_TOKEN=${apiToken}`,
+    );
 
     return runner;
   }
@@ -72,12 +69,20 @@ export class AccountService {
       order: { createdAt: 'DESC' },
     });
 
-    // Enrich with process status
-    return runners.map((r) => ({
-      ...r,
-      processRunning: this.runnerProcess.isRunning(r.id),
-      localPort: this.runnerProcess.getPort(r.id),
-    }));
+    const now = Date.now();
+    return runners.map((r) => {
+      const heartbeatAge = r.lastHeartbeatAt
+        ? now - new Date(r.lastHeartbeatAt).getTime()
+        : Infinity;
+      const isAlive = heartbeatAge < AccountService.HEARTBEAT_TIMEOUT_MS;
+
+      return {
+        ...r,
+        processRunning: isAlive && r.status === 'online',
+        localPort: (r.metadata as any)?.localApiPort,
+        localHost: (r.metadata as any)?.localApiHost,
+      };
+    });
   }
 
   async deleteRunner(tenantId: string, runnerId: string) {
@@ -86,11 +91,7 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    // Kill the process first
-    this.runnerProcess.killProcess(runnerId);
-
     // Delete all device sessions referencing this runner
-    // (prevents FK constraint violation on device_sessions.runner_id)
     await this.sessionRepo
       .createQueryBuilder()
       .delete()
@@ -98,13 +99,12 @@ export class AccountService {
       .execute();
 
     // Delete all devices referencing this runner
-    // (prevents FK constraint violation on devices.runner_id)
     await this.runnerRepo.manager.query(
       `DELETE FROM devices WHERE runner_id = $1`,
       [runnerId],
     );
 
-    // Delete all runs referencing this runner (set runner_id to null)
+    // Null out runner reference on runs
     await this.runnerRepo.manager.query(
       `UPDATE runs SET runner_id = NULL WHERE runner_id = $1`,
       [runnerId],
@@ -120,8 +120,12 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    const port = await this.runnerProcess.restartRunner(runner);
-    return { runnerId: runner.id, name: runner.name, port, status: 'restarting' };
+    return {
+      runnerId: runner.id,
+      name: runner.name,
+      status: 'independent',
+      message: 'KRC nodes are independently managed. Restart the KRC process on the target machine.',
+    };
   }
 
   async stopRunner(tenantId: string, runnerId: string) {
@@ -130,9 +134,13 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    this.runnerProcess.killProcess(runnerId);
     await this.runnerRepo.update(runnerId, { status: 'offline' });
-    return { runnerId: runner.id, name: runner.name, status: 'stopped' };
+    return {
+      runnerId: runner.id,
+      name: runner.name,
+      status: 'marked_offline',
+      message: 'Runner marked offline. Stop the KRC process on the target machine to fully shut down.',
+    };
   }
 
   async startRunner(tenantId: string, runnerId: string) {
@@ -141,12 +149,21 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    const port = await this.runnerProcess.spawnRunner(runner);
-    return { runnerId: runner.id, name: runner.name, port, status: 'starting' };
+    return {
+      runnerId: runner.id,
+      name: runner.name,
+      status: 'independent',
+      message: 'KRC nodes are independently managed. Start the KRC process on the target machine.',
+      apiToken: runner.apiToken,
+    };
   }
 
   getRunnerProcessStatus() {
-    return this.runnerProcess.getStatus();
+    return {
+      mode: 'kcp',
+      message: 'Runners are independently deployed KRC Node Agents. Check KCP for node status.',
+      processes: [],
+    };
   }
 
   async updateRunnerHeartbeat(

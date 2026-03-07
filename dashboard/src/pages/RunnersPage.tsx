@@ -41,7 +41,7 @@ export default function RunnersPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this runner? The process will be terminated.')) return;
+    if (!confirm('Delete this runner registration? The KRC node agent will need to re-register.')) return;
     setRunners((prev) => prev.filter((r) => r.id !== id));
     try {
       await api.deleteRunner(id);
@@ -118,6 +118,7 @@ export default function RunnersPage() {
                   <span>Last seen: {new Date(r.lastHeartbeatAt || r.lastHeartbeat || r.last_heartbeat_at).toLocaleString('ko-KR')}</span>
                 ) : (<span>Never connected</span>)}
                 {r.metadata?.devices?.length > 0 && <span>{r.metadata.devices.length} device(s)</span>}
+                {r.localHost && r.localHost !== 'localhost' && <span className="font-mono">{r.localHost}</span>}
               </div>
             </div>
           </div>
@@ -142,7 +143,7 @@ export default function RunnersPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-xl font-bold text-white">Runners</h2>
-          <p className="text-xs text-muted mt-0.5">Platform-specific local processes. Each runner handles one platform.</p>
+          <p className="text-xs text-muted mt-0.5">Node Agents (KRC). Each runner is an independent node registered via Control Plane.</p>
         </div>
         <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-accent text-white px-3 py-1.5 rounded-lg text-sm hover:bg-accent-hover transition-colors">
           <Plus size={14} /> New Runner
@@ -189,7 +190,7 @@ export default function RunnersPage() {
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowCreate(false)}>
           <div className="bg-card rounded-2xl border border-border p-6 w-full max-w-sm animate-modal-in" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-base font-semibold text-white mb-1">New Runner</h3>
-            <p className="text-xs text-muted mb-4">Choose a platform. The runner process starts automatically after creation.</p>
+            <p className="text-xs text-muted mb-4">Register a runner. Deploy KRC on the target machine with the generated token.</p>
             <form onSubmit={handleCreate} className="space-y-3">
               <div>
                 <label className="block text-xs text-muted mb-1">Platform</label>
@@ -224,7 +225,7 @@ export default function RunnersPage() {
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={() => setShowCreate(false)} className="flex-1 px-3 py-2 border border-border rounded-lg text-sm text-muted hover:text-white transition-colors">Cancel</button>
                 <button type="submit" disabled={saving} className="flex-1 bg-accent text-white px-3 py-2 rounded-lg text-sm hover:bg-accent-hover transition-colors disabled:opacity-50">
-                  {saving ? 'Creating...' : 'Create & Start'}
+                  {saving ? 'Creating...' : 'Register'}
                 </button>
               </div>
             </form>
