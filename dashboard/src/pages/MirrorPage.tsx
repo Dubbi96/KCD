@@ -215,8 +215,8 @@ export default function MirrorPage() {
   useEffect(() => {
     if (!sessionId) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = window.location.hostname;
-    const wsUrl = `${protocol}//${host}:4000/ws/device`;
+    const host = window.location.host; // includes port if non-standard
+    const wsUrl = `${protocol}//${host}/ws/device`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

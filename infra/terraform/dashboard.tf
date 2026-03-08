@@ -133,6 +133,30 @@ resource "aws_cloudfront_distribution" "dashboard" {
   }
 
   # ---------------------------------------------------------------------------
+  # Ordered Cache Behavior: /ws/* -> ALB (WebSocket, no caching)
+  # ---------------------------------------------------------------------------
+  ordered_cache_behavior {
+    path_pattern           = "/ws/*"
+    allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods         = ["GET", "HEAD"]
+    target_origin_id       = "alb-kcd-api"
+    viewer_protocol_policy = "redirect-to-https"
+    compress               = false
+
+    forwarded_values {
+      query_string = true
+      headers      = ["*"]
+      cookies {
+        forward = "all"
+      }
+    }
+
+    min_ttl     = 0
+    default_ttl = 0
+    max_ttl     = 0
+  }
+
+  # ---------------------------------------------------------------------------
   # Ordered Cache Behavior: /api/v1/* -> ALB (no caching)
   # ---------------------------------------------------------------------------
   ordered_cache_behavior {

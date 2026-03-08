@@ -80,6 +80,7 @@ export class StreamController {
       platform: body.platform || 'web',
       options: {},
       runnerId: body.runnerId,
+      streamId: id,
     });
   }
 }
