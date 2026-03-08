@@ -308,10 +308,18 @@ export class RunService {
       const htmlReport = await this.reportService.generateHtmlReport(run.tenantId, run.id);
       reportUrl = await this.storageService.uploadHtmlReport(run.tenantId, run.id, htmlReport);
       if (!reportUrl) {
-        this.logger.warn(`S3 not configured for tenant ${run.tenantId} — report URL omitted from webhook`);
+        // No S3 — use dashboard API URL as fallback
+        reportUrl = this.storageService.buildReportUrl(run.tenantId, run.id);
       }
     } catch (err: any) {
       this.logger.error(`Report upload error: ${err.message}`);
+      reportUrl = this.storageService.buildReportUrl(run.tenantId, run.id);
+    }
+
+    // Persist report URL on run entity
+    if (reportUrl) {
+      run.reportUrl = reportUrl;
+      await this.runRepo.save(run);
     }
 
     // Load scenario names for webhook display

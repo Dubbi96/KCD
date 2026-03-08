@@ -69,6 +69,9 @@ export class Run {
   @Column({ name: 'runner_id', nullable: true })
   runnerId: string;
 
+  @Column({ name: 'report_url', type: 'text', nullable: true })
+  reportUrl: string;
+
   @OneToMany(() => ScenarioRun, (sr) => sr.run)
   scenarioRuns: ScenarioRun[];
 }

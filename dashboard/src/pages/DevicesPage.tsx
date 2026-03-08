@@ -125,7 +125,10 @@ export default function DevicesPage() {
   const androidDevices = devices.filter(d => d.platform === 'android');
   const physicalDevices = [...iosDevices, ...androidDevices];
   const borrowedDevices = devices.filter(d => d.borrowedBy);
-  const activeSessions = sessions.filter(s => s.status !== 'closed');
+  const activeSessions = sessions.filter(s => s.status !== 'closed' && s.status !== 'error');
+  // Orphaned sessions: active sessions not tied to a currently borrowed device (e.g. web sessions, or device was returned but session lingered)
+  const borrowedDeviceUdids = new Set(borrowedDevices.map(d => d.deviceUdid));
+  const orphanedSessions = activeSessions.filter(s => !borrowedDeviceUdids.has(s.deviceId));
 
   // Find active session for a device
   const deviceSession = (deviceUdid: string) =>
@@ -312,6 +315,58 @@ export default function DevicesPage() {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* ═══ Active Sessions (reconnectable) ═══ */}
+      {orphanedSessions.length > 0 && (
+        <div className="mb-8">
+          <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+            <MonitorPlay size={14} className="text-blue-400" /> Active Sessions
+            <span className="text-xs text-muted font-normal">- 진행 중인 세션에 다시 접속할 수 있습니다</span>
+          </h3>
+          <div className="space-y-2">
+            {orphanedSessions.map(session => (
+              <div key={session.id} className="bg-card rounded-xl border border-border p-4 hover:border-border/80 transition-colors">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${platformBg(session.platform)}`}>
+                      {platformIcon(session.platform)}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-white">{session.deviceName || `${session.platform}:${session.deviceId?.slice(0, 12)}`}</span>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                          session.status === 'recording' ? 'bg-red-500/15 text-red-400' :
+                          'bg-green-500/15 text-green-400'
+                        }`}>
+                          {session.status === 'recording' ? 'REC' : session.status}
+                        </span>
+                      </div>
+                      <div className="text-xs text-muted mt-0.5">
+                        {session.options?.url && <span>{session.options.url} | </span>}
+                        생성: {new Date(session.createdAt).toLocaleString('ko-KR')}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => navigate(`/devices/mirror/${session.id}`)}
+                      className="flex items-center gap-1 bg-accent/15 text-accent px-2.5 py-1 rounded-lg text-xs hover:bg-accent/25 transition-colors"
+                    >
+                      <ArrowLeftRight size={12} /> Reconnect
+                    </button>
+                    <button
+                      onClick={() => handleCloseSession(session.id)}
+                      className="flex items-center gap-1 text-muted hover:text-orange-400 text-xs transition-colors px-2 py-1"
+                    >
+                      <Square size={12} /> Close
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}
