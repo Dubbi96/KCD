@@ -79,6 +79,17 @@ export class ScheduleService {
     });
   }
 
+  async cleanStuckPlannedRuns(tenantId: string, scheduleId: string) {
+    const result = await this.plannedRunRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: 'SKIPPED' as any })
+      .where('schedule_id = :scheduleId AND tenant_id = :tenantId', { scheduleId, tenantId })
+      .andWhere('status IN (:...statuses)', { statuses: ['QUEUED', 'RUNNING'] })
+      .execute();
+    return { cleaned: result.affected || 0 };
+  }
+
   async cronPreview(dto: CronPreviewDto) {
     try {
       const interval = cronParser.parseExpression(dto.cronExpr, {
@@ -206,6 +217,17 @@ export class ScheduleService {
 
   async processDuePlannedRuns() {
     const now = Date.now();
+
+    // Auto-clean stuck PlannedRuns: QUEUED/RUNNING for over 30 minutes are stale
+    const staleThreshold = now - 30 * 60 * 1000;
+    await this.plannedRunRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: 'SKIPPED' as any })
+      .where('status IN (:...statuses)', { statuses: ['QUEUED', 'RUNNING'] })
+      .andWhere('planned_at < :threshold', { threshold: staleThreshold })
+      .execute();
+
     // Optimized: filter by plannedAt in DB query with LIMIT
     const dueRuns = await this.plannedRunRepo
       .createQueryBuilder('pr')

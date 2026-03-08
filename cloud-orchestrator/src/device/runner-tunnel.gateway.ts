@@ -35,6 +35,7 @@ import * as WebSocket from 'ws';
 import { v4 as uuid } from 'uuid';
 import { EventEmitter } from 'events';
 import { Runner } from '../account/runner.entity';
+import { DeviceSession } from './device-session.entity';
 
 interface ClientState {
   runnerId: string;
@@ -58,6 +59,7 @@ export class RunnerTunnelGateway implements OnGatewayConnection, OnGatewayDiscon
 
   constructor(
     @InjectRepository(Runner) private runnerRepo: Repository<Runner>,
+    @InjectRepository(DeviceSession) private sessionRepo: Repository<DeviceSession>,
   ) {
     this.events.setMaxListeners(200);
   }
@@ -165,7 +167,7 @@ export class RunnerTunnelGateway implements OnGatewayConnection, OnGatewayDiscon
   }
 
   @SubscribeMessage('session-event')
-  handleSessionEvent(
+  async handleSessionEvent(
     @ConnectedSocket() client: any,
     @MessageBody() data: { sessionId: string; eventType: string; data: any },
   ) {
@@ -177,6 +179,27 @@ export class RunnerTunnelGateway implements OnGatewayConnection, OnGatewayDiscon
       data.eventType,
       data.data,
     );
+
+    // When KRC reports session closed, update the DeviceSession record in DB
+    if (data.eventType === 'status' && data.data === 'closed') {
+      try {
+        const result = await this.sessionRepo
+          .createQueryBuilder()
+          .update()
+          .set({ status: 'closed', closedAt: new Date() })
+          .where('runner_session_id = :sid AND runner_id = :rid AND status != :closed', {
+            sid: data.sessionId,
+            rid: state.runnerId,
+            closed: 'closed',
+          })
+          .execute();
+        if (result.affected && result.affected > 0) {
+          this.logger.log(`Session ${data.sessionId} marked closed in DB (runner: ${state.runnerId})`);
+        }
+      } catch (err: any) {
+        this.logger.warn(`Failed to mark session closed: ${err.message}`);
+      }
+    }
   }
 
   // ─── Public API (called by DeviceService / DeviceGateway) ──

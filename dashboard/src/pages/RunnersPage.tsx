@@ -13,7 +13,6 @@ export default function RunnersPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
-  const [platform, setPlatform] = useState<'web' | 'ios' | 'android'>('web');
   const [saving, setSaving] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
 
@@ -28,9 +27,8 @@ export default function RunnersPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.createRunner({ name, platform });
+      await api.createRunner({ name, platform: 'web' });
       setName('');
-      setPlatform('web');
       setShowCreate(false);
       load();
     } catch (err: any) {
@@ -73,14 +71,6 @@ export default function RunnersPage() {
   };
 
   const inputClass = "w-full px-3 py-2 bg-card2 border border-border rounded-lg text-white text-sm focus:ring-1 focus:ring-accent focus:border-accent outline-none transition-colors";
-
-  // Group by platform
-  const webRunners = runners.filter(r => r.platform === 'web');
-  const iosRunners = runners.filter(r => r.platform === 'ios');
-  const androidRunners = runners.filter(r => r.platform === 'android');
-  // Include runners without platform field (legacy) in web
-  const untyped = runners.filter(r => !r.platform);
-  if (untyped.length > 0) webRunners.push(...untyped);
 
   const renderRunnerCard = (r: any) => {
     const online = isOnline(r);
@@ -174,28 +164,11 @@ export default function RunnersPage() {
         <div className="text-center py-16">
           <Monitor size={32} className="text-muted mx-auto mb-3" />
           <p className="text-muted text-sm">No runners yet.</p>
-          <p className="text-muted text-xs mt-1">Create a platform-specific runner (Web, iOS, or Android) to start testing.</p>
+          <p className="text-muted text-xs mt-1">Register a KRC node agent to start testing.</p>
         </div>
       ) : (
-        <div className="space-y-6">
-          {webRunners.length > 0 && (
-            <div>
-              <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5"><Globe size={12} className="text-blue-400" /> Web</h3>
-              <div className="space-y-2">{webRunners.map(renderRunnerCard)}</div>
-            </div>
-          )}
-          {iosRunners.length > 0 && (
-            <div>
-              <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5"><Smartphone size={12} className="text-green-400" /> iOS</h3>
-              <div className="space-y-2">{iosRunners.map(renderRunnerCard)}</div>
-            </div>
-          )}
-          {androidRunners.length > 0 && (
-            <div>
-              <h3 className="text-xs font-semibold text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5"><TabletSmartphone size={12} className="text-yellow-400" /> Android</h3>
-              <div className="space-y-2">{androidRunners.map(renderRunnerCard)}</div>
-            </div>
-          )}
+        <div className="space-y-2">
+          {runners.map(renderRunnerCard)}
         </div>
       )}
 
@@ -204,37 +177,11 @@ export default function RunnersPage() {
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowCreate(false)}>
           <div className="bg-card rounded-2xl border border-border p-6 w-full max-w-sm animate-modal-in" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-base font-semibold text-white mb-1">New Runner</h3>
-            <p className="text-xs text-muted mb-4">Register a runner. Deploy KRC on the target machine with the generated token.</p>
+            <p className="text-xs text-muted mb-4">Register a KRC node agent. Each node handles all platforms (Web, iOS, Android). Deploy KRC on the target machine with the generated token.</p>
             <form onSubmit={handleCreate} className="space-y-3">
               <div>
-                <label className="block text-xs text-muted mb-1">Platform</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {(['web', 'ios', 'android'] as const).map((p) => {
-                    const cfg = PLATFORM_CONFIG[p];
-                    const PIcon = cfg.icon;
-                    const selected = platform === p;
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => setPlatform(p)}
-                        className={`p-3 rounded-xl border text-center transition-all ${
-                          selected
-                            ? 'border-accent bg-accent/10'
-                            : 'border-border bg-card2 hover:border-border/80'
-                        }`}
-                      >
-                        <PIcon size={20} className={`mx-auto mb-1 ${selected ? 'text-accent' : 'text-muted'}`} />
-                        <div className={`text-xs font-medium ${selected ? 'text-white' : 'text-muted'}`}>{cfg.label}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-                <p className="text-[11px] text-muted mt-1.5">{PLATFORM_CONFIG[platform].desc}</p>
-              </div>
-              <div>
                 <label className="block text-xs text-muted mb-1">Runner Name</label>
-                <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder={`e.g. ${platform}-runner-1`} required />
+                <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="e.g. runner-1" required />
               </div>
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={() => setShowCreate(false)} className="flex-1 px-3 py-2 border border-border rounded-lg text-sm text-muted hover:text-white transition-colors">Cancel</button>

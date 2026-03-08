@@ -76,4 +76,13 @@ export class ScheduleController {
   runNow(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.scheduleService.runNow(user.tenantId, id);
   }
+
+  @Post(':id/planned-runs/clean')
+  @ApiOperation({ summary: 'Clean stuck planned runs (QUEUED/RUNNING → SKIPPED)' })
+  async cleanPlannedRuns(
+    @CurrentUser() user: JwtPayload,
+    @Param('id') scheduleId: string,
+  ) {
+    return this.scheduleService.cleanStuckPlannedRuns(user.tenantId, scheduleId);
+  }
 }
