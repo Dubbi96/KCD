@@ -112,13 +112,27 @@ export default function RunnersPage() {
                 </span>
                 {r.localPort && <span className="text-[10px] text-muted font-mono">:{r.localPort}</span>}
               </div>
-              <div className="text-xs text-muted mt-0.5 flex items-center gap-3">
+              <div className="text-xs text-muted mt-0.5 flex items-center gap-3 flex-wrap">
                 <span className="font-mono">{r.id.slice(0, 8)}</span>
                 {r.lastHeartbeatAt || r.lastHeartbeat || r.last_heartbeat_at ? (
                   <span>Last seen: {new Date(r.lastHeartbeatAt || r.lastHeartbeat || r.last_heartbeat_at).toLocaleString('ko-KR')}</span>
                 ) : (<span>Never connected</span>)}
                 {r.metadata?.devices?.length > 0 && <span>{r.metadata.devices.length} device(s)</span>}
                 {r.localHost && r.localHost !== 'localhost' && <span className="font-mono">{r.localHost}</span>}
+                {r.metadata?.supportedPlatforms?.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    Platforms: {(r.metadata.supportedPlatforms as string[]).map((p: string) => (
+                      <span key={p} className={`px-1 py-0.5 rounded text-[9px] font-medium ${
+                        p === 'web' ? 'bg-blue-500/15 text-blue-400' :
+                        p === 'ios' ? 'bg-green-500/15 text-green-400' :
+                        'bg-yellow-500/15 text-yellow-400'
+                      }`}>{p}</span>
+                    ))}
+                  </span>
+                )}
+                {r.metadata?.activeJobCount !== undefined && r.metadata.activeJobCount > 0 && (
+                  <span className="text-blue-400">{r.metadata.activeJobCount} job(s) running</span>
+                )}
               </div>
             </div>
           </div>

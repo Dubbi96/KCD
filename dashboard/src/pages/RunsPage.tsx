@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
-import { Plus, XCircle, ChevronLeft, ChevronRight, FileBarChart, Key } from 'lucide-react';
+import { Plus, XCircle, ChevronLeft, ChevronRight, FileBarChart, Key, ExternalLink } from 'lucide-react';
 
 export default function RunsPage() {
   const navigate = useNavigate();
@@ -144,10 +144,19 @@ export default function RunsPage() {
                     </td>
                     <td className="px-4 py-3 text-muted">{new Date(run.createdAt || run.created_at).toLocaleString('ko-KR')}</td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                        <button onClick={() => navigate(`/runs/${run.id}/report`)} className="p-1 text-muted hover:text-white transition-colors" title="Report">
-                          <FileBarChart size={13} />
-                        </button>
+                      <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                        {['completed', 'failed'].includes(run.status) ? (
+                          <button
+                            onClick={() => navigate(`/runs/${run.id}/report`)}
+                            className="flex items-center gap-1 px-2 py-1 bg-accent/15 text-accent rounded-md text-[11px] font-medium hover:bg-accent/25 transition-colors"
+                          >
+                            <FileBarChart size={12} /> Report
+                          </button>
+                        ) : (
+                          <button onClick={() => navigate(`/runs/${run.id}/report`)} className="p-1 text-muted hover:text-white transition-colors" title="Details">
+                            <ExternalLink size={13} />
+                          </button>
+                        )}
                         {(run.status === 'queued' || run.status === 'running') && (
                           <button onClick={() => handleCancel(run.id)} className="p-1 text-muted hover:text-red-400 transition-colors" title="Cancel">
                             <XCircle size={13} />
