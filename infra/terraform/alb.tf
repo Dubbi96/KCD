@@ -27,11 +27,12 @@ resource "aws_lb" "kcd" {
 }
 
 resource "aws_lb_target_group" "kcd" {
-  name        = "${local.name_prefix}-kcd-tg"
-  port        = 4000
-  protocol    = "HTTP"
-  vpc_id      = aws_vpc.main.id
-  target_type = "ip"
+  name                          = "${local.name_prefix}-kcd-tg"
+  port                          = 4000
+  protocol                      = "HTTP"
+  vpc_id                        = aws_vpc.main.id
+  target_type                   = "ip"
+  deregistration_delay          = 30
 
   health_check {
     enabled             = true
