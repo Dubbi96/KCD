@@ -134,7 +134,7 @@ export class StorageService {
    * 리포트 공개 URL을 생성한다 (S3 미설정 시 대시보드 URL).
    */
   buildReportUrl(tenantId: string, runId: string): string {
-    return `${this.dashboardUrl}/api/v1/runs/${runId}/report/html`;
+    return `/api/v1/runs/${runId}/report/html`;
   }
 
   // ─── Private ──────────────────────────────────────
