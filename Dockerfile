@@ -9,6 +9,7 @@ RUN npm run build
 
 # ---- runner ----
 FROM node:20-alpine
+RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=builder /app/cloud-orchestrator/dist ./dist
 COPY --from=builder /app/cloud-orchestrator/node_modules ./node_modules
