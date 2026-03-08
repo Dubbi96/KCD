@@ -1,88 +1,70 @@
+# =============================================================================
+# Variables
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# General
+# -----------------------------------------------------------------------------
 variable "aws_region" {
-  description = "AWS region"
+  description = "AWS region to deploy into"
   type        = string
   default     = "ap-northeast-2"
 }
 
-variable "project_name" {
-  description = "Project name used for resource naming"
-  type        = string
-  default     = "katab"
-}
-
 variable "environment" {
-  description = "Environment (dev, staging, prod)"
+  description = "Deployment environment (dev, staging, prod)"
   type        = string
   default     = "dev"
 }
 
-variable "vpc_cidr" {
-  description = "VPC CIDR block"
+variable "project" {
+  description = "Project name used as prefix for all resource names"
   type        = string
-  default     = "10.0.0.0/16"
+  default     = "katab"
 }
 
-# RDS
+# -----------------------------------------------------------------------------
+# Database
+# -----------------------------------------------------------------------------
 variable "db_username" {
-  description = "Database master username"
+  description = "Master username for RDS PostgreSQL instances"
   type        = string
   default     = "katab"
   sensitive   = true
 }
 
 variable "db_password" {
-  description = "Database master password"
+  description = "Master password for RDS PostgreSQL instances"
   type        = string
   sensitive   = true
 }
 
-variable "db_name" {
-  description = "Database name"
-  type        = string
-  default     = "katab_orchestrator"
-}
-
-variable "rds_instance_class" {
-  description = "RDS instance class"
-  type        = string
-  default     = "db.t3.micro"
-}
-
-# ElastiCache
-variable "redis_node_type" {
-  description = "ElastiCache Redis node type"
-  type        = string
-  default     = "cache.t3.micro"
-}
-
-# ECS
-variable "ecs_cpu" {
-  description = "ECS task CPU units"
-  type        = number
-  default     = 512
-}
-
-variable "ecs_memory" {
-  description = "ECS task memory (MiB)"
-  type        = number
-  default     = 1024
-}
-
-variable "ecs_desired_count" {
-  description = "Number of ECS tasks"
-  type        = number
-  default     = 1
-}
-
-# Security
+# -----------------------------------------------------------------------------
+# Security / Auth
+# -----------------------------------------------------------------------------
 variable "jwt_secret" {
-  description = "JWT secret key"
+  description = "JWT signing secret for KCD authentication"
   type        = string
   sensitive   = true
 }
 
-variable "certificate_arn" {
-  description = "ACM certificate ARN for HTTPS"
+variable "kcp_service_token" {
+  description = "Service token for KCD -> KCP communication (X-Service-Token header)"
   type        = string
-  default     = ""
+  sensitive   = true
+}
+
+# -----------------------------------------------------------------------------
+# Container Image Tags
+# -----------------------------------------------------------------------------
+variable "kcd_image_tag" {
+  description = "Docker image tag for KCD container"
+  type        = string
+  default     = "latest"
+}
+
+variable "kcp_image_tag" {
+  description = "Docker image tag for KCP container"
+  type        = string
+  default     = "latest"
 }

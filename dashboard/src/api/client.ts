@@ -151,8 +151,14 @@ export const api = {
   removeJob: (platform: string, jobId: string) =>
     request<any>(`/runs/queue/${platform}/jobs/${jobId}`, { method: 'DELETE' }),
 
-  // Devices
+  // Devices — Borrow / Return
   getDevices: () => request<any[]>('/devices'),
+  borrowDevice: (deviceId: string) =>
+    request<any>(`/devices/${deviceId}/borrow`, { method: 'POST' }),
+  returnDevice: (deviceId: string) =>
+    request<any>(`/devices/${deviceId}/return`, { method: 'POST' }),
+
+  // Devices — Sessions
   getDeviceSessions: () => request<any[]>('/devices/sessions'),
   createDeviceSession: (data: any) =>
     request<any>('/devices/sessions', { method: 'POST', body: JSON.stringify(data) }),

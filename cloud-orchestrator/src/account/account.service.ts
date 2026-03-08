@@ -55,13 +55,16 @@ export class AccountService {
     });
     await this.runnerRepo.save(runner);
 
-    // Auto-spawn the local-runner process
-    try {
-      const port = await this.runnerProcess.spawnRunner(runner);
-      this.logger.log(`Runner "${runner.name}" spawned on port ${port}`);
-    } catch (e: any) {
-      this.logger.error(`Failed to auto-spawn runner: ${e.message}`);
-      // Runner is still created in DB — can be started manually later
+    // Auto-spawn only in local development (cloud ECS has no local KRC)
+    if (process.env.NODE_ENV === 'development') {
+      try {
+        const port = await this.runnerProcess.spawnRunner(runner);
+        this.logger.log(`Runner "${runner.name}" spawned on port ${port}`);
+      } catch (e: any) {
+        this.logger.error(`Failed to auto-spawn runner: ${e.message}`);
+      }
+    } else {
+      this.logger.log(`Runner "${runner.name}" created (cloud mode — configure KRC with RUNNER_ID=${runner.id} RUNNER_API_TOKEN=${runner.apiToken})`);
     }
 
     return runner;
@@ -128,8 +131,11 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    const port = await this.runnerProcess.restartRunner(runner);
-    return { runnerId: runner.id, name: runner.name, port, status: 'restarting' };
+    if (process.env.NODE_ENV === 'development') {
+      const port = await this.runnerProcess.restartRunner(runner);
+      return { runnerId: runner.id, name: runner.name, port, status: 'restarting' };
+    }
+    return { runnerId: runner.id, name: runner.name, status: 'pending', message: 'Cloud mode — restart KRC manually on the host machine' };
   }
 
   async stopRunner(tenantId: string, runnerId: string) {
@@ -138,7 +144,9 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    this.runnerProcess.killProcess(runnerId);
+    if (process.env.NODE_ENV === 'development') {
+      this.runnerProcess.killProcess(runnerId);
+    }
     await this.runnerRepo.update(runnerId, { status: 'offline' });
     return { runnerId: runner.id, name: runner.name, status: 'stopped' };
   }
@@ -149,8 +157,11 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    const port = await this.runnerProcess.spawnRunner(runner);
-    return { runnerId: runner.id, name: runner.name, port, status: 'starting' };
+    if (process.env.NODE_ENV === 'development') {
+      const port = await this.runnerProcess.spawnRunner(runner);
+      return { runnerId: runner.id, name: runner.name, port, status: 'starting' };
+    }
+    return { runnerId: runner.id, name: runner.name, status: 'pending', message: 'Cloud mode — start KRC manually on the host machine' };
   }
 
   getRunnerProcessStatus() {

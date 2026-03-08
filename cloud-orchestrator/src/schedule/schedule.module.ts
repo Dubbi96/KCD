@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { Schedule } from './schedule.entity';
@@ -12,7 +12,7 @@ import { RunModule } from '../run/run.module';
   imports: [
     TypeOrmModule.forFeature([Schedule, PlannedRun]),
     ConfigModule,
-    RunModule,
+    forwardRef(() => RunModule),
   ],
   providers: [ScheduleService, SchedulerDaemon],
   controllers: [ScheduleController],

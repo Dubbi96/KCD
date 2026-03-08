@@ -53,6 +53,15 @@ export class Schedule {
   @Column({ name: 'lookahead_count', default: 5 })
   lookaheadCount: number;
 
+  @Column({ name: 'target_platform', length: 20, default: 'web' })
+  targetPlatform: 'web' | 'ios' | 'android';
+
+  @Column({ default: true })
+  headless: boolean;
+
+  @Column({ type: 'jsonb', default: {} })
+  options: Record<string, any>;
+
   @Column({ name: 'order_no', default: 0 })
   orderNo: number;
 

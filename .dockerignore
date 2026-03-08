@@ -1,0 +1,11 @@
+node_modules
+dashboard/node_modules
+dashboard/dist
+.git
+.github
+infra
+scripts
+*.md
+*.log
+.env*
+.pids

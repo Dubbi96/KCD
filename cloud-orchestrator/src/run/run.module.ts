@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Run } from './run.entity';
 import { ScenarioRun } from './scenario-run.entity';
@@ -14,16 +14,26 @@ import { AuthProfileModule } from '../auth-profile/auth-profile.module';
 import { DeviceModule } from '../device/device.module';
 import { WebhookModule } from '../webhook/webhook.module';
 import { ControlPlaneModule } from '../control-plane/control-plane.module';
+import { StreamModule } from '../stream/stream.module';
+import { GroupModule } from '../group/group.module';
+import { ScheduleModule } from '../schedule/schedule.module';
+import { StorageModule } from '../storage/storage.module';
+import { Scenario } from '../scenario/scenario.entity';
+import { StorageSettings } from '../storage/storage-settings.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Run, ScenarioRun]),
+    TypeOrmModule.forFeature([Run, ScenarioRun, Scenario, StorageSettings]),
     AccountModule,
     ScenarioModule,
     AuthProfileModule,
     DeviceModule,
     WebhookModule,
     ControlPlaneModule,
+    forwardRef(() => StreamModule),
+    forwardRef(() => GroupModule),
+    forwardRef(() => ScheduleModule),
+    StorageModule,
   ],
   providers: [
     RunService,

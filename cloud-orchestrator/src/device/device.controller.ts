@@ -31,6 +31,22 @@ export class DeviceController {
     return this.deviceService.listDevices(req.user.tenantId);
   }
 
+  // ─── Borrow / Return (device reservation) ────────
+
+  @Post(':id/borrow')
+  @ApiOperation({ summary: 'Borrow (reserve) a device for this tenant — no session created yet' })
+  async borrowDevice(@Request() req: any, @Param('id') deviceId: string) {
+    return this.deviceService.reserveDevice(req.user.tenantId, req.user.sub, deviceId);
+  }
+
+  @Post(':id/return')
+  @ApiOperation({ summary: 'Return a borrowed device — closes any active sessions and releases' })
+  async returnDevice(@Request() req: any, @Param('id') deviceId: string) {
+    return this.deviceService.releaseDevice(req.user.tenantId, deviceId);
+  }
+
+  // ─── Sessions (on borrowed devices) ──────────────
+
   @Get('sessions')
   @ApiOperation({ summary: 'List device sessions' })
   async listSessions(@Request() req: any) {
@@ -44,9 +60,9 @@ export class DeviceController {
   }
 
   @Post('sessions')
-  @ApiOperation({ summary: 'Borrow a device and create a mirror/recording session' })
+  @ApiOperation({ summary: 'Create a mirror/recording session on a borrowed device' })
   async createSession(@Request() req: any, @Body() dto: CreateDeviceSessionDto) {
-    return this.deviceService.borrowDevice(req.user.tenantId, req.user.sub, dto);
+    return this.deviceService.createSessionOnBorrowedDevice(req.user.tenantId, req.user.sub, dto);
   }
 
   @Get('sessions/:id')
@@ -56,9 +72,9 @@ export class DeviceController {
   }
 
   @Delete('sessions/:id')
-  @ApiOperation({ summary: 'Return device — close session and release back to pool' })
+  @ApiOperation({ summary: 'Close session — device stays borrowed' })
   async closeSession(@Request() req: any, @Param('id') id: string) {
-    return this.deviceService.returnDevice(req.user.tenantId, id);
+    return this.deviceService.closeSession(req.user.tenantId, id);
   }
 
   @Post('sessions/:id/save-recording')

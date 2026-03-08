@@ -2,7 +2,19 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ScenarioRun } from './scenario-run.entity';
+import { StorageSettings } from '../storage/storage-settings.entity';
 
+/**
+ * ArtifactSweeperService — S3-aware TTL 기반 resultJson 정리
+ *
+ * S3 설정된 테넌트: 로컬 데이터는 이미 업로드되었으므로 공격적으로 정리
+ *   - PASS: 1시간 후 삭제
+ *   - FAIL: 24시간 후 삭제
+ *
+ * S3 미설정 테넌트: 로컬 데이터가 유일한 소스
+ *   - PASS: 24시간 후 삭제
+ *   - FAIL: 7일 후 삭제
+ */
 @Injectable()
 export class ArtifactSweeperService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('ArtifactSweeper');
@@ -11,15 +23,19 @@ export class ArtifactSweeperService implements OnModuleInit, OnModuleDestroy {
   /** How often the sweep runs (1 hour) */
   private readonly TICK_MS = 60 * 60 * 1000;
 
-  /** Passed scenario-run artifacts kept for 24 hours */
-  private readonly PASS_TTL_HOURS = 24;
+  /** S3 configured: aggressive cleanup (already uploaded) */
+  private readonly S3_PASS_TTL_MS = 1 * 60 * 60 * 1000;       // 1 hour
+  private readonly S3_FAIL_TTL_MS = 24 * 60 * 60 * 1000;      // 24 hours
 
-  /** Failed / infra-failed scenario-run artifacts kept for 7 days */
-  private readonly FAIL_TTL_HOURS = 168;
+  /** No S3: data is only local */
+  private readonly LOCAL_PASS_TTL_MS = 24 * 60 * 60 * 1000;   // 24 hours
+  private readonly LOCAL_FAIL_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
   constructor(
     @InjectRepository(ScenarioRun)
     private scenarioRunRepo: Repository<ScenarioRun>,
+    @InjectRepository(StorageSettings)
+    private storageSettingsRepo: Repository<StorageSettings>,
   ) {}
 
   onModuleInit() {
@@ -39,36 +55,88 @@ export class ArtifactSweeperService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('Starting artifact sweep...');
 
     const now = Date.now();
-    const passThreshold = new Date(now - this.PASS_TTL_HOURS * 3600 * 1000);
-    const failThreshold = new Date(now - this.FAIL_TTL_HOURS * 3600 * 1000);
+    let totalCleared = 0;
 
-    // Clear result_json from passed scenario runs older than PASS_TTL
-    const passedCleared = await this.scenarioRunRepo
+    // 1. Find tenants with S3 configured
+    const s3Settings = await this.storageSettingsRepo
+      .createQueryBuilder('s')
+      .select('s.tenant_id', 'tenantId')
+      .where('s.s3_bucket IS NOT NULL')
+      .getRawMany();
+    const s3TenantIds: string[] = s3Settings.map((s: any) => s.tenantId);
+
+    // 2. S3-configured tenants: aggressive cleanup
+    if (s3TenantIds.length > 0) {
+      const s3PassThreshold = new Date(now - this.S3_PASS_TTL_MS);
+      const s3FailThreshold = new Date(now - this.S3_FAIL_TTL_MS);
+
+      const s3PassCleared = await this.scenarioRunRepo
+        .createQueryBuilder()
+        .update()
+        .set({ resultJson: () => 'NULL' })
+        .where('status = :status', { status: 'passed' })
+        .andWhere('result_json IS NOT NULL')
+        .andWhere('completed_at < :threshold', { threshold: s3PassThreshold })
+        .andWhere('tenant_id IN (:...tenantIds)', { tenantIds: s3TenantIds })
+        .execute();
+
+      const s3FailCleared = await this.scenarioRunRepo
+        .createQueryBuilder()
+        .update()
+        .set({ resultJson: () => 'NULL' })
+        .where('status IN (:...statuses)', { statuses: ['failed', 'infra_failed'] })
+        .andWhere('result_json IS NOT NULL')
+        .andWhere('completed_at < :threshold', { threshold: s3FailThreshold })
+        .andWhere('tenant_id IN (:...tenantIds)', { tenantIds: s3TenantIds })
+        .execute();
+
+      const s3Total = (s3PassCleared.affected || 0) + (s3FailCleared.affected || 0);
+      if (s3Total > 0) {
+        this.logger.log(`S3 tenants: swept ${s3Total} artifacts (pass: ${s3PassCleared.affected}, fail: ${s3FailCleared.affected})`);
+      }
+      totalCleared += s3Total;
+    }
+
+    // 3. Non-S3 tenants: standard TTL
+    const localPassThreshold = new Date(now - this.LOCAL_PASS_TTL_MS);
+    const localFailThreshold = new Date(now - this.LOCAL_FAIL_TTL_MS);
+
+    const passQuery = this.scenarioRunRepo
       .createQueryBuilder()
       .update()
       .set({ resultJson: () => 'NULL' })
       .where('status = :status', { status: 'passed' })
       .andWhere('result_json IS NOT NULL')
-      .andWhere('completed_at < :threshold', { threshold: passThreshold })
-      .execute();
+      .andWhere('completed_at < :threshold', { threshold: localPassThreshold });
 
-    // Clear result_json from failed/infra_failed scenario runs older than FAIL_TTL
-    const failedCleared = await this.scenarioRunRepo
+    if (s3TenantIds.length > 0) {
+      passQuery.andWhere('tenant_id NOT IN (:...s3TenantIds)', { s3TenantIds });
+    }
+
+    const localPassCleared = await passQuery.execute();
+
+    const failQuery = this.scenarioRunRepo
       .createQueryBuilder()
       .update()
       .set({ resultJson: () => 'NULL' })
       .where('status IN (:...statuses)', { statuses: ['failed', 'infra_failed'] })
       .andWhere('result_json IS NOT NULL')
-      .andWhere('completed_at < :threshold', { threshold: failThreshold })
-      .execute();
+      .andWhere('completed_at < :threshold', { threshold: localFailThreshold });
 
-    const total =
-      (passedCleared.affected || 0) + (failedCleared.affected || 0);
+    if (s3TenantIds.length > 0) {
+      failQuery.andWhere('tenant_id NOT IN (:...s3TenantIds)', { s3TenantIds });
+    }
 
-    if (total > 0) {
-      this.logger.log(
-        `Swept ${total} artifacts (passed: ${passedCleared.affected}, failed: ${failedCleared.affected})`,
-      );
+    const localFailCleared = await failQuery.execute();
+
+    const localTotal = (localPassCleared.affected || 0) + (localFailCleared.affected || 0);
+    if (localTotal > 0) {
+      this.logger.log(`Local tenants: swept ${localTotal} artifacts (pass: ${localPassCleared.affected}, fail: ${localFailCleared.affected})`);
+    }
+    totalCleared += localTotal;
+
+    if (totalCleared > 0) {
+      this.logger.log(`Artifact sweep complete: ${totalCleared} total cleared`);
     }
   }
 }

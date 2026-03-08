@@ -35,4 +35,19 @@ export class CreateRunDto {
   @IsOptional()
   @IsString()
   runnerId?: string;
+
+  @ApiProperty({ description: 'Schedule ID (set by scheduler)', required: false })
+  @IsOptional()
+  @IsString()
+  scheduleId?: string;
+
+  @ApiProperty({ description: 'Stream ID (set by scheduler)', required: false })
+  @IsOptional()
+  @IsString()
+  streamId?: string;
+
+  @ApiProperty({ description: 'PlannedRun ID (set by scheduler)', required: false })
+  @IsOptional()
+  @IsString()
+  plannedRunId?: string;
 }

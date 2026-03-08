@@ -70,11 +70,10 @@ export class RunnerProcessService implements OnModuleInit, OnModuleDestroy {
 
     const cloudApiUrl = `http://localhost:${process.env.PORT || 4000}/api/v1`;
 
-    // Local dev: enable all platforms so a single runner can handle web + mobile devices.
-    // The primary platform is used for KCP job routing; additional platforms enable
-    // on-demand Appium/tunnel support for physically connected devices.
-    const allPlatforms = new Set<string>(['web', 'ios', 'android']);
-    allPlatforms.add(runner.platform || 'web');
+    // Runner only registers the platform it was configured for.
+    // This ensures KCP routes iOS jobs to iOS runners, web jobs to web runners, etc.
+    // If you need a runner that handles multiple platforms, create separate runners.
+    const runnerPlatform = runner.platform || 'web';
 
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
@@ -85,7 +84,7 @@ export class RunnerProcessService implements OnModuleInit, OnModuleDestroy {
       LOCAL_API_PORT: String(port),
       REDIS_HOST: process.env.REDIS_HOST || 'localhost',
       REDIS_PORT: process.env.REDIS_PORT || '6379',
-      RUNNER_PLATFORMS: Array.from(allPlatforms).join(','),
+      RUNNER_PLATFORMS: runnerPlatform,
     };
 
     // iOS-specific env vars — always pass through so on-demand iOS works

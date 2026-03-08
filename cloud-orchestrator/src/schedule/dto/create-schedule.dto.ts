@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsIn, IsBoolean, IsNumber } from 'class-validator';
+import { IsString, IsOptional, IsIn, IsBoolean, IsNumber, IsObject } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateScheduleDto {
@@ -54,6 +54,21 @@ export class CreateScheduleDto {
   @IsOptional()
   @IsIn(['RUN_ALL', 'RUN_LATEST_ONLY', 'SKIP_ALL'])
   misfirePolicy?: 'RUN_ALL' | 'RUN_LATEST_ONLY' | 'SKIP_ALL';
+
+  @ApiProperty({ enum: ['web', 'ios', 'android'], default: 'web', required: false })
+  @IsOptional()
+  @IsIn(['web', 'ios', 'android'])
+  targetPlatform?: 'web' | 'ios' | 'android';
+
+  @ApiProperty({ description: 'Run in headless mode (default: true for schedules)', default: true, required: false })
+  @IsOptional()
+  @IsBoolean()
+  headless?: boolean;
+
+  @ApiProperty({ description: 'Additional run options (speed, screenshots, etc.)', required: false })
+  @IsOptional()
+  @IsObject()
+  options?: Record<string, any>;
 
   @ApiProperty({ default: true, required: false })
   @IsOptional()

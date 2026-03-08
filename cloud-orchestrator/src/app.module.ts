@@ -15,6 +15,7 @@ import { GroupModule } from './group/group.module';
 import { StreamModule } from './stream/stream.module';
 import { TestDataModule } from './test-data/test-data.module';
 import { ControlPlaneModule } from './control-plane/control-plane.module';
+import { StorageModule } from './storage/storage.module';
 
 @Module({
   imports: [
@@ -33,8 +34,13 @@ import { ControlPlaneModule } from './control-plane/control-plane.module';
         password: config.get('DB_PASSWORD', 'katab_secret'),
         database: config.get('DB_DATABASE', 'katab_orchestrator'),
         entities: [__dirname + '/**/*.entity{.ts,.js}'],
+        migrations: [__dirname + '/database/migrations/*{.ts,.js}'],
+        migrationsRun: true,
         synchronize: false,
         logging: config.get('NODE_ENV') === 'development' ? ['error', 'warn', 'schema', 'migration'] : false,
+        ...(config.get('NODE_ENV') !== 'development' && config.get('DB_HOST') !== 'localhost' && {
+          ssl: { rejectUnauthorized: false },
+        }),
       }),
     }),
     DatabaseModule,
@@ -51,6 +57,7 @@ import { ControlPlaneModule } from './control-plane/control-plane.module';
     StreamModule,
     TestDataModule,
     ControlPlaneModule,
+    StorageModule,
   ],
 })
 export class AppModule {}

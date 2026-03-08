@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import {
   Smartphone, Monitor, Wifi, WifiOff, Play, Square, Video, RefreshCw,
-  Globe, ChevronDown, TabletSmartphone, ArrowLeftRight,
+  Globe, ChevronDown, TabletSmartphone, ArrowLeftRight, Lock, Unlock, MonitorPlay,
 } from 'lucide-react';
 
 export default function DevicesPage() {
@@ -13,20 +13,21 @@ export default function DevicesPage() {
   const [initialLoading, setInitialLoading] = useState(true);
   const hasLoadedOnce = useRef(false);
 
-  // Web borrow form state
+  // Web session form state
   const [webUrl, setWebUrl] = useState('https://');
   const [webFps, setWebFps] = useState(2);
   const [webDeviceType, setWebDeviceType] = useState('desktop');
   const [webBorrowing, setWebBorrowing] = useState(false);
 
-  // iOS form state
-  const [iosBundleId, setIosBundleId] = useState('');
-  const [iosBorrowing, setIosBorrowing] = useState(false);
+  // Session creation form (for borrowed devices)
+  const [sessionDeviceId, setSessionDeviceId] = useState<string | null>(null);
+  const [sessionBundleId, setSessionBundleId] = useState('');
+  const [sessionPackage, setSessionPackage] = useState('');
+  const [sessionActivity, setSessionActivity] = useState('');
+  const [creatingSession, setCreatingSession] = useState(false);
 
-  // Android form state
-  const [androidPackage, setAndroidPackage] = useState('');
-  const [androidActivity, setAndroidActivity] = useState('');
-  const [androidBorrowing, setAndroidBorrowing] = useState(false);
+  // Borrow loading
+  const [borrowingId, setBorrowingId] = useState<string | null>(null);
 
   const load = async (isInitial = false) => {
     if (isInitial) setInitialLoading(true);
@@ -49,40 +50,67 @@ export default function DevicesPage() {
     return () => clearInterval(t);
   }, []);
 
-  // Borrow a device (create session)
-  const handleBorrow = async (device: any, extra: Record<string, any> = {}) => {
+  // ─── Borrow / Return (device reservation) ─────
+
+  const handleBorrow = async (device: any) => {
+    setBorrowingId(device.id);
     try {
-      const session = await api.createDeviceSession({
-        deviceId: device.id,
-        ...extra,
-      });
-      navigate(`/devices/mirror/${session.id}`);
+      await api.borrowDevice(device.id);
+      await load(false);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setBorrowingId(null);
+    }
+  };
+
+  const handleReturn = async (device: any) => {
+    if (!confirm('이 디바이스를 반납하시겠습니까? 활성 세션이 모두 종료됩니다.')) return;
+    try {
+      await api.returnDevice(device.id);
+      await load(false);
     } catch (err: any) {
       alert(err.message);
     }
   };
 
-  // Return a device (close session)
-  const handleReturn = async (sessionId: string) => {
-    if (!confirm('Return this device? The session will be closed.')) return;
-    setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status: 'closed' } : s));
+  // ─── Session lifecycle ────────────────────────
+
+  const handleCreateSession = async (device: any) => {
+    setCreatingSession(true);
+    try {
+      const extra: Record<string, any> = {};
+      if (device.platform === 'ios' && sessionBundleId) extra.bundleId = sessionBundleId;
+      if (device.platform === 'android') {
+        if (sessionPackage) extra.appPackage = sessionPackage;
+        if (sessionActivity) extra.appActivity = sessionActivity;
+      }
+      const session = await api.createDeviceSession({ deviceId: device.id, fps: 2, ...extra });
+      navigate(`/devices/mirror/${session.id}`);
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setCreatingSession(false);
+      setSessionDeviceId(null);
+    }
+  };
+
+  const handleCloseSession = async (sessionId: string) => {
+    if (!confirm('세션을 종료하시겠습니까? 디바이스는 대여 상태로 유지됩니다.')) return;
     try {
       await api.closeDeviceSession(sessionId);
+      await load(false);
     } catch {
       load(false);
     }
   };
 
-  // Web session (no device needed — standalone)
+  // Web session (no device needed)
   const handleWebSession = async () => {
-    if (!webUrl || webUrl === 'https://') { alert('Enter a URL.'); return; }
+    if (!webUrl || webUrl === 'https://') { alert('URL을 입력하세요.'); return; }
     setWebBorrowing(true);
     try {
-      const session = await api.createWebSession({
-        url: webUrl,
-        fps: webFps,
-        deviceType: webDeviceType,
-      });
+      const session = await api.createWebSession({ url: webUrl, fps: webFps, deviceType: webDeviceType });
       navigate(`/devices/mirror/${session.id}`);
     } catch (err: any) {
       alert(err.message);
@@ -91,35 +119,17 @@ export default function DevicesPage() {
     }
   };
 
-  // iOS borrow
-  const handleIOSBorrow = async (device: any) => {
-    setIosBorrowing(true);
-    try {
-      await handleBorrow(device, { bundleId: iosBundleId || undefined, fps: 2 });
-    } finally {
-      setIosBorrowing(false);
-    }
-  };
+  // ─── Device categorization ───────────────────
 
-  // Android borrow
-  const handleAndroidBorrow = async (device: any) => {
-    setAndroidBorrowing(true);
-    try {
-      await handleBorrow(device, {
-        appPackage: androidPackage || undefined,
-        appActivity: androidActivity || undefined,
-        fps: 2,
-      });
-    } finally {
-      setAndroidBorrowing(false);
-    }
-  };
-
-  // Categorize devices (only physical devices — web sessions are standalone)
   const iosDevices = devices.filter(d => d.platform === 'ios');
   const androidDevices = devices.filter(d => d.platform === 'android');
   const physicalDevices = [...iosDevices, ...androidDevices];
+  const borrowedDevices = devices.filter(d => d.borrowedBy);
   const activeSessions = sessions.filter(s => s.status !== 'closed');
+
+  // Find active session for a device
+  const deviceSession = (deviceUdid: string) =>
+    activeSessions.find(s => s.deviceId === deviceUdid && s.status !== 'closed' && s.status !== 'error');
 
   const statusBadge = (status: string) => {
     if (status === 'available') return 'bg-green-500/15 text-green-400';
@@ -129,7 +139,7 @@ export default function DevicesPage() {
 
   const statusLabel = (status: string) => {
     if (status === 'available') return 'Available';
-    if (status === 'in_use') return 'In Use';
+    if (status === 'in_use') return 'Borrowed';
     return 'Offline';
   };
 
@@ -166,7 +176,7 @@ export default function DevicesPage() {
         <div>
           <h2 className="text-xl font-bold text-white">Device Pool</h2>
           <p className="text-xs text-muted mt-0.5">
-            Devices are registered by Runners automatically. Borrow a device to start mirroring or recording.
+            디바이스를 대여한 후, 세션을 생성하여 미러링/녹화/테스트에 사용할 수 있습니다.
           </p>
         </div>
         <button onClick={() => load(false)} className="flex items-center gap-1.5 text-muted hover:text-white text-sm transition-colors">
@@ -174,12 +184,12 @@ export default function DevicesPage() {
         </button>
       </div>
 
-      {/* Pool Summary (physical devices only) */}
+      {/* Pool Summary */}
       <div className="grid grid-cols-4 gap-3 mb-6">
         {[
           { label: 'Devices', count: physicalDevices.length, color: 'text-white' },
           { label: 'Available', count: physicalDevices.filter(d => d.status === 'available').length, color: 'text-green-400' },
-          { label: 'In Use', count: physicalDevices.filter(d => d.status === 'in_use').length, color: 'text-yellow-400' },
+          { label: 'Borrowed', count: borrowedDevices.length, color: 'text-yellow-400' },
           { label: 'Offline', count: physicalDevices.filter(d => d.status === 'offline').length, color: 'text-gray-400' },
         ].map((s) => (
           <div key={s.label} className="bg-card rounded-xl border border-border p-3 text-center">
@@ -189,59 +199,124 @@ export default function DevicesPage() {
         ))}
       </div>
 
-      {/* Active Sessions (Borrowed Devices) */}
-      {activeSessions.length > 0 && (
+      {/* ═══ Borrowed Devices ═══ */}
+      {borrowedDevices.length > 0 && (
         <div className="mb-8">
           <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-            <ArrowLeftRight size={14} className="text-accent" /> Borrowed Devices
+            <Lock size={14} className="text-yellow-400" /> 대여 중인 디바이스
           </h3>
           <div className="space-y-2">
-            {activeSessions.map(s => (
-              <div key={s.id} className="bg-card rounded-xl border border-border p-4 hover:border-border/80 transition-colors">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-lg ${platformBg(s.platform)}`}>
-                      {platformIcon(s.platform)}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-medium text-white uppercase">{s.platform}</span>
-                        <span className="text-xs font-mono text-muted">{s.deviceId?.slice(0, 12)}</span>
-                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                          s.status === 'active' || s.status === 'recording' ? 'bg-green-500/15 text-green-400' :
-                          s.status === 'creating' ? 'bg-yellow-500/15 text-yellow-400' :
-                          'bg-red-500/15 text-red-400'
-                        }`}>
-                          {s.status === 'recording' ? 'REC' : s.status}
-                        </span>
+            {borrowedDevices.map(device => {
+              const session = deviceSession(device.deviceUdid);
+              const showSessionForm = sessionDeviceId === device.id;
+
+              return (
+                <div key={device.id} className="bg-card rounded-xl border border-border p-4 hover:border-border/80 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 rounded-lg ${platformBg(device.platform)}`}>
+                        {platformIcon(device.platform)}
                       </div>
-                      <div className="text-xs text-muted mt-0.5">
-                        Borrowed {new Date(s.createdAt).toLocaleString('ko-KR')}
-                        {s.options?.url && <span className="ml-2">| {s.options.url}</span>}
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-white">{device.name || device.model}</span>
+                          <span className="text-xs font-mono text-muted">{device.deviceUdid?.slice(0, 12)}</span>
+                          {session && (
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                              session.status === 'recording' ? 'bg-red-500/15 text-red-400' :
+                              session.status === 'active' ? 'bg-green-500/15 text-green-400' :
+                              'bg-yellow-500/15 text-yellow-400'
+                            }`}>
+                              {session.status === 'recording' ? 'REC' : session.status}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted mt-0.5">
+                          대여: {device.borrowedAt ? new Date(device.borrowedAt).toLocaleString('ko-KR') : '-'}
+                          {session?.options?.url && <span className="ml-2">| {session.options.url}</span>}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {(s.status === 'active' || s.status === 'recording') && (
+                    <div className="flex items-center gap-2">
+                      {/* Session actions */}
+                      {session ? (
+                        <>
+                          {(session.status === 'active' || session.status === 'recording') && (
+                            <button
+                              onClick={() => navigate(`/devices/mirror/${session.id}`)}
+                              className="flex items-center gap-1 bg-accent/15 text-accent px-2.5 py-1 rounded-lg text-xs hover:bg-accent/25 transition-colors"
+                            >
+                              <Play size={12} /> Open
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleCloseSession(session.id)}
+                            className="flex items-center gap-1 text-muted hover:text-orange-400 text-xs transition-colors px-2 py-1"
+                            title="세션만 종료 (대여 유지)"
+                          >
+                            <Square size={12} /> 세션 종료
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setSessionDeviceId(showSessionForm ? null : device.id)}
+                          className="flex items-center gap-1 bg-accent/15 text-accent px-2.5 py-1 rounded-lg text-xs hover:bg-accent/25 transition-colors"
+                        >
+                          <MonitorPlay size={12} /> 새 세션
+                        </button>
+                      )}
                       <button
-                        onClick={() => navigate(`/devices/mirror/${s.id}`)}
-                        className="flex items-center gap-1 bg-accent/15 text-accent px-2.5 py-1 rounded-lg text-xs hover:bg-accent/25 transition-colors"
+                        onClick={() => handleReturn(device)}
+                        className="flex items-center gap-1 text-muted hover:text-red-400 text-xs transition-colors px-2 py-1"
+                        title="디바이스 반납"
                       >
-                        <Play size={12} /> Open
+                        <Unlock size={12} /> 반납
                       </button>
-                    )}
-                    <button onClick={() => handleReturn(s.id)} className="flex items-center gap-1 text-muted hover:text-red-400 text-xs transition-colors px-2 py-1" title="Return device">
-                      <Square size={12} /> Return
-                    </button>
+                    </div>
                   </div>
+
+                  {/* Session creation form (inline) */}
+                  {showSessionForm && !session && (
+                    <div className="mt-3 pt-3 border-t border-border">
+                      <div className="flex items-center gap-3">
+                        {device.platform === 'ios' && (
+                          <div className="flex-1">
+                            <label className="block text-xs text-muted mb-1">Bundle ID (optional)</label>
+                            <input value={sessionBundleId} onChange={(e) => setSessionBundleId(e.target.value)} placeholder="com.example.app" className={inputClass} />
+                          </div>
+                        )}
+                        {device.platform === 'android' && (
+                          <>
+                            <div className="flex-1">
+                              <label className="block text-xs text-muted mb-1">Package (optional)</label>
+                              <input value={sessionPackage} onChange={(e) => setSessionPackage(e.target.value)} placeholder="com.example.app" className={inputClass} />
+                            </div>
+                            <div className="flex-1">
+                              <label className="block text-xs text-muted mb-1">Activity (optional)</label>
+                              <input value={sessionActivity} onChange={(e) => setSessionActivity(e.target.value)} placeholder=".MainActivity" className={inputClass} />
+                            </div>
+                          </>
+                        )}
+                        <div className="pt-4">
+                          <button
+                            onClick={() => handleCreateSession(device)}
+                            disabled={creatingSession}
+                            className="flex items-center gap-1.5 bg-accent text-white px-4 py-2 rounded-lg text-sm hover:bg-accent/90 transition-colors disabled:opacity-50"
+                          >
+                            <Video size={14} /> {creatingSession ? 'Starting...' : '세션 시작'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Web Recording (standalone — no device needed) */}
+      {/* ═══ Web Recording (standalone) ═══ */}
       <div className="mb-8">
         <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
           <Globe size={14} className="text-blue-400" /> Web Recording
@@ -251,7 +326,7 @@ export default function DevicesPage() {
             <div className="p-2.5 rounded-lg bg-blue-500/15"><Monitor size={16} className="text-blue-400" /></div>
             <div className="flex-1">
               <span className="text-sm font-medium text-white">Browser Session</span>
-              <p className="text-xs text-muted mt-0.5">Start a web recording session directly. No device registration needed.</p>
+              <p className="text-xs text-muted mt-0.5">별도 디바이스 없이 웹 브라우저 세션을 바로 시작합니다.</p>
             </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
@@ -293,7 +368,7 @@ export default function DevicesPage() {
         </div>
       </div>
 
-      {/* iOS Devices */}
+      {/* ═══ iOS Devices ═══ */}
       <div className="mb-8">
         <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
           <Smartphone size={14} className="text-green-400" /> iOS Devices
@@ -305,34 +380,25 @@ export default function DevicesPage() {
             <p className="text-xs text-muted mt-1">Connect an iPhone/iPad via USB to a machine running an iOS runner.</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            <div className="mb-2">
-              <label className="block text-xs text-muted mb-1">Bundle ID (optional)</label>
-              <input value={iosBundleId} onChange={(e) => setIosBundleId(e.target.value)} placeholder="com.example.app" className={`${inputClass} max-w-xs`} />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {iosDevices.map(device => (
-                <DeviceCard
-                  key={device.id}
-                  device={device}
-                  platformIcon={<Smartphone size={16} className="text-green-400" />}
-                  platformBgClass="bg-green-500/15"
-                  osLabel={`iOS ${device.version || ''}`}
-                  statusBadge={statusBadge}
-                  statusLabel={statusLabel}
-                  onBorrow={() => handleIOSBorrow(device)}
-                  onReturn={() => device.activeSessionId && handleReturn(device.activeSessionId)}
-                  onOpen={() => device.activeSessionId && navigate(`/devices/mirror/${device.activeSessionId}`)}
-                  borrowing={iosBorrowing}
-                  borrowLabel="Borrow"
-                />
-              ))}
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {iosDevices.map(device => (
+              <DeviceCard
+                key={device.id}
+                device={device}
+                platformIcon={<Smartphone size={16} className="text-green-400" />}
+                platformBgClass="bg-green-500/15"
+                osLabel={`iOS ${device.version || ''}`}
+                statusBadge={statusBadge}
+                statusLabel={statusLabel}
+                onBorrow={() => handleBorrow(device)}
+                borrowing={borrowingId === device.id}
+              />
+            ))}
           </div>
         )}
       </div>
 
-      {/* Android Devices */}
+      {/* ═══ Android Devices ═══ */}
       <div className="mb-8">
         <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
           <TabletSmartphone size={14} className="text-yellow-400" /> Android Devices
@@ -344,36 +410,21 @@ export default function DevicesPage() {
             <p className="text-xs text-muted mt-1">Connect an Android device via USB with ADB debugging enabled.</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3 max-w-md mb-2">
-              <div>
-                <label className="block text-xs text-muted mb-1">Package (optional)</label>
-                <input value={androidPackage} onChange={(e) => setAndroidPackage(e.target.value)} placeholder="com.example.app" className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-xs text-muted mb-1">Activity (optional)</label>
-                <input value={androidActivity} onChange={(e) => setAndroidActivity(e.target.value)} placeholder=".MainActivity" className={inputClass} />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {androidDevices.map(device => (
-                <DeviceCard
-                  key={device.id}
-                  device={device}
-                  platformIcon={<TabletSmartphone size={16} className="text-yellow-400" />}
-                  platformBgClass="bg-yellow-500/15"
-                  osLabel={`Android ${device.version || ''}`}
-                  statusBadge={statusBadge}
-                  statusLabel={statusLabel}
-                  onBorrow={() => handleAndroidBorrow(device)}
-                  onReturn={() => device.activeSessionId && handleReturn(device.activeSessionId)}
-                  onOpen={() => device.activeSessionId && navigate(`/devices/mirror/${device.activeSessionId}`)}
-                  borrowing={androidBorrowing}
-                  borrowLabel="Borrow"
-                  borrowBgClass="bg-yellow-500 hover:bg-yellow-400 text-black"
-                />
-              ))}
-            </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {androidDevices.map(device => (
+              <DeviceCard
+                key={device.id}
+                device={device}
+                platformIcon={<TabletSmartphone size={16} className="text-yellow-400" />}
+                platformBgClass="bg-yellow-500/15"
+                osLabel={`Android ${device.version || ''}`}
+                statusBadge={statusBadge}
+                statusLabel={statusLabel}
+                onBorrow={() => handleBorrow(device)}
+                borrowing={borrowingId === device.id}
+                borrowBgClass="bg-yellow-500 hover:bg-yellow-400 text-black"
+              />
+            ))}
           </div>
         )}
       </div>
@@ -389,10 +440,7 @@ function DeviceCard({
   statusBadge,
   statusLabel,
   onBorrow,
-  onReturn,
-  onOpen,
   borrowing,
-  borrowLabel,
   borrowBgClass,
 }: {
   device: any;
@@ -402,10 +450,7 @@ function DeviceCard({
   statusBadge: (s: string) => string;
   statusLabel: (s: string) => string;
   onBorrow: () => void;
-  onReturn: () => void;
-  onOpen: () => void;
   borrowing: boolean;
-  borrowLabel: string;
   borrowBgClass?: string;
 }) {
   return (
@@ -430,17 +475,12 @@ function DeviceCard({
               borrowBgClass || 'bg-green-500 text-white hover:bg-green-600'
             }`}
           >
-            <Play size={10} /> {borrowing ? 'Starting...' : borrowLabel}
+            <Lock size={10} /> {borrowing ? '대여 중...' : '대여'}
           </button>
         ) : device.status === 'in_use' ? (
-          <div className="flex items-center gap-1.5">
-            <button onClick={onOpen} className="flex items-center gap-1 bg-accent/15 text-accent px-2 py-1 rounded-lg text-[10px] hover:bg-accent/25 transition-colors">
-              <Play size={9} /> Open
-            </button>
-            <button onClick={onReturn} className="text-muted hover:text-red-400 text-[10px] transition-colors">
-              Return
-            </button>
-          </div>
+          <span className="text-yellow-400/70 text-[10px] flex items-center gap-1">
+            <Lock size={9} /> 대여됨
+          </span>
         ) : (
           <span className="text-gray-500 text-[10px]">Offline</span>
         )}

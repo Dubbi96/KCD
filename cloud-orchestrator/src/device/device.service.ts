@@ -18,14 +18,8 @@ export class DeviceService {
     private cpService: ControlPlaneService,
   ) {}
 
-  // ─── Device Resource Pool ───────────────────────────
+  // ─── Device Resource Pool (heartbeat sync) ────────
 
-  /**
-   * Upsert devices reported by a runner heartbeat.
-   * - Insert new devices
-   * - Update existing (name, model, version, lastSeenAt)
-   * - Mark devices NOT in this heartbeat as offline (unless in_use)
-   */
   async syncDevicesFromHeartbeat(
     runnerId: string,
     tenantId: string,
@@ -33,10 +27,8 @@ export class DeviceService {
     reportedDevices: Array<{ id: string; platform: string; name: string; model?: string; version?: string }>,
   ) {
     const now = new Date();
-
-    // Only sync physical devices (iOS/Android) reported by runner heartbeat.
-    // Web sessions don't need a device in the pool — they're started directly.
     const reportedUdids: string[] = [];
+
     for (const d of reportedDevices) {
       reportedUdids.push(d.id);
       await this.deviceRepo
@@ -57,12 +49,12 @@ export class DeviceService {
         .execute()
         .catch(() => {});
 
-      // Mark available if was offline and not in_use
+      // Mark available if was offline and NOT borrowed
       await this.deviceRepo
         .createQueryBuilder()
         .update()
         .set({ status: 'available', lastSeenAt: now })
-        .where('runner_id = :runnerId AND device_udid = :udid AND status = :status', {
+        .where('runner_id = :runnerId AND device_udid = :udid AND status = :status AND borrowed_by IS NULL', {
           runnerId,
           udid: d.id,
           status: 'offline',
@@ -70,7 +62,7 @@ export class DeviceService {
         .execute();
     }
 
-    // Mark devices NOT in heartbeat as offline (unless in_use)
+    // Mark devices NOT in heartbeat as offline (unless borrowed/in_use)
     if (reportedUdids.length > 0) {
       await this.deviceRepo
         .createQueryBuilder()
@@ -83,7 +75,6 @@ export class DeviceService {
         })
         .execute();
     } else {
-      // No devices reported — mark all non-in_use as offline
       await this.deviceRepo
         .createQueryBuilder()
         .update()
@@ -96,9 +87,6 @@ export class DeviceService {
     }
   }
 
-  /**
-   * Mark all devices for a runner as offline (e.g., runner went offline).
-   */
   async markRunnerDevicesOffline(runnerId: string) {
     await this.deviceRepo
       .createQueryBuilder()
@@ -110,19 +98,11 @@ export class DeviceService {
 
   // ─── Device Listing ─────────────────────────────────
 
-  /**
-   * List all devices from KCP (source of truth for device inventory).
-   * KRC reports devices to KCP via heartbeat — KCP is account-independent.
-   * KCD enriches with runner info for borrow/session operations.
-   */
   async listDevices(tenantId: string) {
-    // 1) Get devices from KCP (account-independent, all nodes)
+    // KCP = source of truth for device inventory
     const kcpDevices: any[] = await this.cpService.getDevices();
-
-    // 2) Get all tenant runners to map KCP nodes → KCD runners for borrow
     const runners = await this.runnerRepo.find({ where: { tenantId } });
 
-    // Build nodeHost:port → runner mapping from runner metadata
     const runnerByHost = new Map<string, Runner>();
     for (const r of runners) {
       const meta = r.metadata as any;
@@ -131,15 +111,19 @@ export class DeviceService {
       }
     }
 
-    // 3) Get KCP nodes to map nodeId → host:port
     const nodes: any[] = (await this.cpService.getNodes()) || [];
     const nodeMap = new Map(nodes.map((n: any) => [n.id, n]));
+
+    // Load local device borrow state
+    const localDevices = await this.deviceRepo.find({ where: { tenantId } });
+    const borrowMap = new Map(localDevices.map(d => [d.deviceUdid, d]));
 
     return kcpDevices.map((d: any) => {
       const node = nodeMap.get(d.nodeId);
       const hostKey = node ? `${node.host}:${node.port}` : '';
       const runner = runnerByHost.get(hostKey);
       const isOnline = node?.status === 'online';
+      const localDevice = borrowMap.get(d.deviceUdid);
 
       return {
         id: d.id,
@@ -148,10 +132,10 @@ export class DeviceService {
         name: d.name,
         model: d.model || d.osVersion,
         version: d.osVersion,
-        status: isOnline ? d.status : 'offline',
-        borrowedBy: d.tenantId === tenantId ? d.tenantId : null,
-        borrowedAt: null,
-        activeSessionId: null,
+        status: localDevice?.borrowedBy ? 'in_use' : (isOnline ? d.status : 'offline'),
+        borrowedBy: localDevice?.borrowedBy || null,
+        borrowedAt: localDevice?.borrowedAt || null,
+        activeSessionId: localDevice?.activeSessionId || null,
         lastSeenAt: d.lastSeenAt,
         runnerId: runner?.id,
         runnerName: runner?.name || node?.name,
@@ -161,63 +145,176 @@ export class DeviceService {
     });
   }
 
-  // ─── Borrow / Return ────────────────────────────────
+  // ─── Borrow / Return (device reservation only) ────
 
   /**
-   * Borrow a device: mark it as in_use and create a mirror session.
+   * Reserve a device for this tenant/user.
+   * Does NOT create a KRC session — just marks as borrowed.
+   * User can later create sessions (mirror/recording) or run tests on this device.
    */
-  async borrowDevice(tenantId: string, userId: string, dto: CreateDeviceSessionDto) {
-    // 1) Find device from KCP (source of truth)
+  async reserveDevice(tenantId: string, userId: string, kcpDeviceId: string) {
+    // 1. Verify device exists and is available in KCP
     const kcpDevices: any[] = await this.cpService.getDevices();
-    const kcpDevice = kcpDevices.find((d: any) => d.id === dto.deviceId);
+    const kcpDevice = kcpDevices.find((d: any) => d.id === kcpDeviceId);
     if (!kcpDevice) throw new NotFoundException('Device not found in resource pool');
 
     if (kcpDevice.status === 'leased') {
-      throw new BadRequestException('Device is already borrowed by another user');
+      throw new BadRequestException('Device is already in use by another node');
     }
     if (kcpDevice.status === 'offline') {
       throw new BadRequestException('Device is offline — runner may be disconnected');
     }
 
-    // 2) Get node info from KCP to find runner host:port
+    // 2. Check local borrow state
+    let localDevice = await this.deviceRepo.findOne({
+      where: { deviceUdid: kcpDevice.deviceUdid, tenantId },
+    });
+
+    if (localDevice?.borrowedBy) {
+      throw new BadRequestException('Device is already borrowed');
+    }
+
+    // 3. Create/update local device record with borrow info
+    if (!localDevice) {
+      // Find runner
+      const nodes: any[] = (await this.cpService.getNodes()) || [];
+      const node = nodes.find((n: any) => n.id === kcpDevice.nodeId);
+      const runners = await this.runnerRepo.find({ where: { tenantId } });
+      const runner = runners.find(r => {
+        const meta = r.metadata as any;
+        return meta?.localApiHost === node?.host && meta?.localApiPort === node?.port;
+      }) || runners[0];
+
+      localDevice = this.deviceRepo.create({
+        tenantId,
+        runnerId: runner?.id || 'unknown',
+        deviceUdid: kcpDevice.deviceUdid,
+        platform: kcpDevice.platform,
+        name: kcpDevice.name,
+        model: kcpDevice.model || kcpDevice.osVersion,
+        version: kcpDevice.osVersion,
+      });
+    }
+
+    localDevice.borrowedBy = userId;
+    localDevice.borrowedAt = new Date();
+    localDevice.status = 'in_use';
+    await this.deviceRepo.save(localDevice);
+
+    this.logger.log(`Device reserved: ${kcpDevice.deviceUdid} by user ${userId}`);
+
+    return {
+      id: kcpDeviceId,
+      deviceUdid: kcpDevice.deviceUdid,
+      platform: kcpDevice.platform,
+      name: kcpDevice.name,
+      status: 'in_use',
+      borrowedBy: userId,
+      borrowedAt: localDevice.borrowedAt,
+    };
+  }
+
+  /**
+   * Return a borrowed device — close any active sessions and release.
+   */
+  async releaseDevice(tenantId: string, kcpDeviceId: string) {
+    // Find KCP device to get UDID
+    const kcpDevices: any[] = await this.cpService.getDevices();
+    const kcpDevice = kcpDevices.find((d: any) => d.id === kcpDeviceId);
+    const deviceUdid = kcpDevice?.deviceUdid;
+
+    if (!deviceUdid) throw new NotFoundException('Device not found');
+
+    const localDevice = await this.deviceRepo.findOne({
+      where: { deviceUdid, tenantId },
+    });
+
+    if (!localDevice || !localDevice.borrowedBy) {
+      throw new BadRequestException('Device is not borrowed');
+    }
+
+    // Close all active sessions on this device
+    const activeSessions = await this.sessionRepo.find({
+      where: { tenantId, deviceId: deviceUdid, status: In(['creating', 'active', 'recording']) },
+    });
+
+    for (const session of activeSessions) {
+      await this.closeSessionOnRunner(session);
+      session.status = 'closed';
+      session.closedAt = new Date();
+      await this.sessionRepo.save(session);
+    }
+
+    // Release borrow
+    localDevice.borrowedBy = null;
+    localDevice.borrowedAt = null;
+    localDevice.activeSessionId = null;
+    localDevice.status = 'available';
+    await this.deviceRepo.save(localDevice);
+
+    this.logger.log(`Device returned: ${deviceUdid}`);
+
+    return {
+      id: kcpDeviceId,
+      deviceUdid,
+      status: 'available',
+      closedSessions: activeSessions.length,
+    };
+  }
+
+  // ─── Session Lifecycle (on borrowed devices) ──────
+
+  /**
+   * Create a mirror/recording session on a device.
+   * If the device is not yet borrowed, auto-borrows it first.
+   */
+  async createSessionOnBorrowedDevice(tenantId: string, userId: string, dto: CreateDeviceSessionDto) {
+    // 1. Find KCP device
+    const kcpDevices: any[] = await this.cpService.getDevices();
+    const kcpDevice = kcpDevices.find((d: any) => d.id === dto.deviceId);
+    if (!kcpDevice) throw new NotFoundException('Device not found in resource pool');
+
+    // 2. Auto-borrow if not already borrowed by this tenant
+    let localDevice = await this.deviceRepo.findOne({
+      where: { deviceUdid: kcpDevice.deviceUdid, tenantId },
+    });
+
+    if (!localDevice?.borrowedBy) {
+      await this.reserveDevice(tenantId, userId, dto.deviceId);
+      localDevice = await this.deviceRepo.findOne({
+        where: { deviceUdid: kcpDevice.deviceUdid, tenantId },
+      });
+    }
+
+    // 3. Find runner
     const nodes: any[] = (await this.cpService.getNodes()) || [];
     const node = nodes.find((n: any) => n.id === kcpDevice.nodeId);
     if (!node || node.status !== 'online') {
       throw new BadRequestException('Node hosting this device is offline');
     }
 
-    // 3) Find the KCD runner that matches this KCP node (by host:port)
     const runners = await this.runnerRepo.find({ where: { tenantId } });
     let runner = runners.find((r) => {
       const meta = r.metadata as any;
       return meta?.localApiHost === node.host && meta?.localApiPort === node.port;
     });
-
-    // Fallback: find any online runner in tenant (for KCD-spawned runners)
     if (!runner) {
       runner = runners.find(
         (r) => r.lastHeartbeatAt && Date.now() - new Date(r.lastHeartbeatAt).getTime() < 90_000,
       );
     }
-    if (!runner) throw new BadRequestException('No runner available for this tenant. Create a runner first.');
+    if (!runner) throw new BadRequestException('No runner available for this tenant');
 
     const platform = kcpDevice.platform;
-    // Construct a device-like object for the rest of the flow
-    const device = {
-      deviceUdid: kcpDevice.deviceUdid,
-      runnerId: runner.id,
-      platform,
-      status: kcpDevice.status,
-    } as any;
     const rc = dto.recordingConfig || {};
     const deviceType = dto.deviceType || rc.deviceType;
 
-    // 1) Create DB session record
+    // 4. Create DB session record
     const session = this.sessionRepo.create({
       tenantId,
-      runnerId: device.runnerId,
+      runnerId: runner.id,
       platform,
-      deviceId: device.deviceUdid,
+      deviceId: kcpDevice.deviceUdid,
       createdBy: userId,
       status: 'creating',
       options: {
@@ -241,12 +338,10 @@ export class DeviceService {
     });
     await this.sessionRepo.save(session);
 
-    // 2) Call runner to create the actual session (Appium/Playwright)
+    // 5. Call KRC to create the actual session (Appium/Playwright)
     try {
       const runnerUrl = this.getRunnerUrl(runner);
-      this.logger.log(
-        `Borrowing device ${device.deviceUdid} → creating session on runner: ${runnerUrl}/sessions`,
-      );
+      this.logger.log(`Creating session on runner: ${runnerUrl}/sessions for device ${kcpDevice.deviceUdid}`);
 
       let res: Response;
       try {
@@ -255,7 +350,7 @@ export class DeviceService {
           headers: this.getRunnerHeaders(runner),
           body: JSON.stringify({
             platform,
-            deviceId: device.deviceUdid,
+            deviceId: kcpDevice.deviceUdid,
             bundleId: dto.bundleId,
             appPackage: dto.appPackage,
             appActivity: dto.appActivity,
@@ -290,27 +385,58 @@ export class DeviceService {
       const runnerSession: any = await res.json();
       session.runnerSessionId = runnerSession.id;
       session.status = runnerSession.status === 'error' ? 'error' : 'active';
-      session.deviceName = `${platform}:${device.deviceUdid.slice(0, 12)}`;
+      session.deviceName = `${platform}:${kcpDevice.deviceUdid.slice(0, 12)}`;
       if (runnerSession.status === 'error') {
         session.errorMessage = 'Session failed on runner';
       }
       await this.sessionRepo.save(session);
 
-      this.logger.log(`Device borrowed: ${device.deviceUdid} → session ${session.id}`);
+      // Update local device with active session
+      if (localDevice) {
+        localDevice.activeSessionId = session.id;
+        await this.deviceRepo.save(localDevice);
+      }
+
+      this.logger.log(`Session created: ${session.id} on device ${kcpDevice.deviceUdid}`);
     } catch (err: any) {
       if (err instanceof BadRequestException) throw err;
       session.status = 'error';
       session.errorMessage = err.message;
       await this.sessionRepo.save(session).catch(() => {});
-      throw new BadRequestException(`Failed to borrow device: ${err.message}`);
+      throw new BadRequestException(`Failed to create session: ${err.message}`);
     }
 
     return session;
   }
 
   /**
+   * Close a session — device stays borrowed.
+   * To fully return the device, use POST /devices/:id/return.
+   */
+  async closeSession(tenantId: string, sessionId: string) {
+    const session = await this.getSession(tenantId, sessionId);
+
+    await this.closeSessionOnRunner(session);
+
+    session.status = 'closed';
+    session.closedAt = new Date();
+    await this.sessionRepo.save(session);
+
+    // Clear activeSessionId on local device (if this was the active session)
+    const localDevice = await this.deviceRepo.findOne({
+      where: { tenantId, activeSessionId: sessionId },
+    });
+    if (localDevice) {
+      localDevice.activeSessionId = null;
+      await this.deviceRepo.save(localDevice);
+    }
+
+    this.logger.log(`Session closed: ${sessionId} (device stays borrowed)`);
+    return session;
+  }
+
+  /**
    * Start a web recording session — no physical device needed.
-   * Finds an online runner and creates a Playwright session directly.
    */
   async startWebSession(
     tenantId: string,
@@ -319,7 +445,6 @@ export class DeviceService {
   ) {
     if (!dto.url) throw new BadRequestException('URL is required for web sessions');
 
-    // Find an online runner in this tenant
     const runners = await this.runnerRepo.find({ where: { tenantId } });
     const onlineRunner = runners.find(
       (r) =>
@@ -330,7 +455,6 @@ export class DeviceService {
 
     const rc = dto.recordingConfig || {};
 
-    // Create DB session record
     const session = this.sessionRepo.create({
       tenantId,
       runnerId: onlineRunner.id,
@@ -354,7 +478,6 @@ export class DeviceService {
     });
     await this.sessionRepo.save(session);
 
-    // Call runner to create the Playwright session
     try {
       const runnerUrl = this.getRunnerUrl(onlineRunner);
       this.logger.log(`Starting web session on runner: ${runnerUrl}/sessions`);
@@ -400,46 +523,7 @@ export class DeviceService {
     return session;
   }
 
-  /**
-   * Return a borrowed device: close session and mark available.
-   */
-  async returnDevice(tenantId: string, sessionId: string) {
-    const session = await this.getSession(tenantId, sessionId);
-
-    // Call runner to close session
-    if (session.runnerSessionId && session.status !== 'closed' && session.status !== 'error') {
-      try {
-        const runner = await this.runnerRepo.findOne({ where: { id: session.runnerId } });
-        if (runner) {
-          const runnerUrl = this.getRunnerUrl(runner);
-          await fetch(`${runnerUrl}/sessions/${session.runnerSessionId}`, {
-            method: 'DELETE',
-            headers: this.getRunnerHeaders(runner),
-            signal: AbortSignal.timeout(10_000),
-          });
-        }
-      } catch (err: any) {
-        this.logger.warn(`Failed to close session on runner: ${err.message}`);
-      }
-    }
-
-    session.status = 'closed';
-    session.closedAt = new Date();
-    await this.sessionRepo.save(session);
-
-    this.logger.log(`Device session closed: ${session.deviceId}`);
-
-    return session;
-  }
-
-  // ─── Session CRUD (keep for backward compat) ───────
-
-  /**
-   * Create session — delegates to borrowDevice.
-   */
-  async createSession(tenantId: string, userId: string, dto: CreateDeviceSessionDto) {
-    return this.borrowDevice(tenantId, userId, dto);
-  }
+  // ─── Session CRUD ─────────────────────────────────
 
   async listSessions(tenantId: string) {
     return this.sessionRepo.find({
@@ -457,16 +541,6 @@ export class DeviceService {
     return session;
   }
 
-  /**
-   * Close session — delegates to returnDevice.
-   */
-  async closeSession(tenantId: string, sessionId: string) {
-    return this.returnDevice(tenantId, sessionId);
-  }
-
-  /**
-   * Save recording from runner as a scenario.
-   */
   async saveRecording(
     tenantId: string,
     sessionId: string,
@@ -492,7 +566,42 @@ export class DeviceService {
     await this.sessionRepo.update(sessionId, update);
   }
 
-  // ─── Helpers ────────────────────────────────────────
+  // ─── Backward compat aliases ──────────────────────
+
+  /** @deprecated Use reserveDevice + createSessionOnBorrowedDevice */
+  async borrowDevice(tenantId: string, userId: string, dto: CreateDeviceSessionDto) {
+    return this.createSessionOnBorrowedDevice(tenantId, userId, dto);
+  }
+
+  /** @deprecated Use closeSession */
+  async returnDevice(tenantId: string, sessionId: string) {
+    return this.closeSession(tenantId, sessionId);
+  }
+
+  /** @deprecated Use createSessionOnBorrowedDevice */
+  async createSession(tenantId: string, userId: string, dto: CreateDeviceSessionDto) {
+    return this.createSessionOnBorrowedDevice(tenantId, userId, dto);
+  }
+
+  // ─── Private Helpers ──────────────────────────────
+
+  private async closeSessionOnRunner(session: DeviceSession) {
+    if (session.runnerSessionId && session.status !== 'closed' && session.status !== 'error') {
+      try {
+        const runner = await this.runnerRepo.findOne({ where: { id: session.runnerId } });
+        if (runner) {
+          const runnerUrl = this.getRunnerUrl(runner);
+          await fetch(`${runnerUrl}/sessions/${session.runnerSessionId}`, {
+            method: 'DELETE',
+            headers: this.getRunnerHeaders(runner),
+            signal: AbortSignal.timeout(10_000),
+          });
+        }
+      } catch (err: any) {
+        this.logger.warn(`Failed to close session on runner: ${err.message}`);
+      }
+    }
+  }
 
   private getRunnerUrl(runner: Runner): string {
     const host = (runner.metadata as any)?.localApiHost || 'localhost';
@@ -500,7 +609,6 @@ export class DeviceService {
     return `http://${host}:${port}`;
   }
 
-  /** Build headers for KCD → KRC calls (includes runner auth token) */
   private getRunnerHeaders(runner: Runner): Record<string, string> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (runner.apiToken) {

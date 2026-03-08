@@ -1,0 +1,25 @@
+# =============================================================================
+# Katab KCD - Terraform Variables Example
+# =============================================================================
+# Copy this file to terraform.tfvars and fill in the actual values.
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# IMPORTANT: Never commit terraform.tfvars to version control.
+# =============================================================================
+
+# General
+aws_region  = "ap-northeast-2"
+environment = "dev"
+project     = "katab"
+
+# Database (shared credentials for both KCD and KCP RDS instances)
+db_username = "katab"
+db_password = "CHANGE_ME_STRONG_PASSWORD_HERE"
+
+# Auth / Security
+jwt_secret        = "CHANGE_ME_JWT_SECRET_HERE"
+kcp_service_token = "CHANGE_ME_KCP_SERVICE_TOKEN_HERE"
+
+# Container image tags (defaults to "latest")
+# kcd_image_tag = "v1.0.0"
+# kcp_image_tag = "v1.0.0"
