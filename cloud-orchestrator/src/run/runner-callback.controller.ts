@@ -128,12 +128,7 @@ export class RunnerCallbackController {
     },
   ) {
     const runner = await this.validateToken(token);
-    await this.accountService.updateRunnerHeartbeat(runner.id, body.status, {
-      devices: body.devices,
-      activeSessions: body.activeSessions,
-      localApiPort: body.localApiPort,
-      localApiHost: body.localApiHost,
-    });
+    await this.accountService.updateRunnerHeartbeat(runner.id, body.status, body);
 
     // Sync devices into the device resource pool
     await this.deviceService.syncDevicesFromHeartbeat(

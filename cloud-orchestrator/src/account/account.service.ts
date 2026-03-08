@@ -171,7 +171,7 @@ export class AccountService {
   async updateRunnerHeartbeat(
     runnerId: string,
     status: 'online' | 'offline' | 'busy',
-    extra?: { devices?: any[]; activeSessions?: number; localApiPort?: number; localApiHost?: string },
+    extra?: Record<string, any>,
   ) {
     if (extra) {
       await this.runnerRepo
@@ -185,6 +185,9 @@ export class AccountService {
             activeSessions: extra.activeSessions || 0,
             localApiPort: extra.localApiPort || 5001,
             localApiHost: extra.localApiHost || 'localhost',
+            supportedPlatforms: extra.supportedPlatforms,
+            maxConcurrentJobs: extra.maxConcurrentJobs,
+            activeJobCount: extra.activeJobCount,
             lastDeviceReport: new Date().toISOString(),
           } as any,
         })
