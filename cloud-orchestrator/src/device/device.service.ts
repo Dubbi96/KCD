@@ -6,6 +6,7 @@ import { DeviceSession } from './device-session.entity';
 import { Runner } from '../account/runner.entity';
 import { CreateDeviceSessionDto } from './dto/create-session.dto';
 import { ControlPlaneService } from '../control-plane/control-plane.service';
+import { RunnerTunnelGateway } from './runner-tunnel.gateway';
 
 @Injectable()
 export class DeviceService {
@@ -16,6 +17,7 @@ export class DeviceService {
     @InjectRepository(DeviceSession) private sessionRepo: Repository<DeviceSession>,
     @InjectRepository(Runner) private runnerRepo: Repository<Runner>,
     private cpService: ControlPlaneService,
+    private runnerTunnel: RunnerTunnelGateway,
   ) {}
 
   // ─── Device Resource Pool (heartbeat sync) ────────
@@ -340,49 +342,61 @@ export class DeviceService {
 
     // 5. Call KRC to create the actual session (Appium/Playwright)
     try {
-      const runnerUrl = this.getRunnerUrl(runner);
-      this.logger.log(`Creating session on runner: ${runnerUrl}/sessions for device ${kcpDevice.deviceUdid}`);
+      const sessionPayload = {
+        platform,
+        deviceId: kcpDevice.deviceUdid,
+        bundleId: dto.bundleId,
+        appPackage: dto.appPackage,
+        appActivity: dto.appActivity,
+        url: dto.url,
+        fps: dto.fps || 2,
+        browser: rc.browser,
+        viewport: rc.viewport,
+        deviceType,
+        controlOptions: rc.controlOptions,
+      };
 
-      let res: Response;
-      try {
-        res = await fetch(`${runnerUrl}/sessions`, {
-          method: 'POST',
-          headers: this.getRunnerHeaders(runner),
-          body: JSON.stringify({
-            platform,
-            deviceId: kcpDevice.deviceUdid,
-            bundleId: dto.bundleId,
-            appPackage: dto.appPackage,
-            appActivity: dto.appActivity,
-            url: dto.url,
-            fps: dto.fps || 2,
-            browser: rc.browser,
-            viewport: rc.viewport,
-            deviceType,
-            controlOptions: rc.controlOptions,
-          }),
-          signal: AbortSignal.timeout(130_000),
-        });
-      } catch (fetchErr: any) {
-        const hint =
-          fetchErr.cause?.code === 'ECONNREFUSED'
-            ? ` — runner process may not be running on ${runnerUrl}`
-            : '';
-        session.status = 'error';
-        session.errorMessage = `Cannot reach runner: ${fetchErr.message}${hint}`;
-        await this.sessionRepo.save(session).catch(() => {});
-        throw new BadRequestException(session.errorMessage);
+      let runnerSession: any;
+
+      // Prefer tunnel (cloud mode — KRC behind NAT)
+      if (this.runnerTunnel.isConnected(runner.id)) {
+        this.logger.log(`Creating session via tunnel on runner ${runner.name} for device ${kcpDevice.deviceUdid}`);
+        runnerSession = await this.runnerTunnel.sendCommand(runner.id, 'create-session', sessionPayload);
+      } else {
+        // Fallback: direct HTTP (local dev)
+        const runnerUrl = this.getRunnerUrl(runner);
+        this.logger.log(`Creating session on runner: ${runnerUrl}/sessions for device ${kcpDevice.deviceUdid}`);
+
+        let res: Response;
+        try {
+          res = await fetch(`${runnerUrl}/sessions`, {
+            method: 'POST',
+            headers: this.getRunnerHeaders(runner),
+            body: JSON.stringify(sessionPayload),
+            signal: AbortSignal.timeout(130_000),
+          });
+        } catch (fetchErr: any) {
+          const hint =
+            fetchErr.cause?.code === 'ECONNREFUSED'
+              ? ` — runner process may not be running on ${runnerUrl}`
+              : '';
+          session.status = 'error';
+          session.errorMessage = `Cannot reach runner: ${fetchErr.message}${hint}`;
+          await this.sessionRepo.save(session).catch(() => {});
+          throw new BadRequestException(session.errorMessage);
+        }
+
+        if (!res.ok) {
+          const text = await res.text();
+          session.status = 'error';
+          session.errorMessage = `Runner returned ${res.status}: ${text.slice(0, 500)}`;
+          await this.sessionRepo.save(session).catch(() => {});
+          throw new BadRequestException(session.errorMessage);
+        }
+
+        runnerSession = await res.json();
       }
 
-      if (!res.ok) {
-        const text = await res.text();
-        session.status = 'error';
-        session.errorMessage = `Runner returned ${res.status}: ${text.slice(0, 500)}`;
-        await this.sessionRepo.save(session).catch(() => {});
-        throw new BadRequestException(session.errorMessage);
-      }
-
-      const runnerSession: any = await res.json();
       session.runnerSessionId = runnerSession.id;
       session.status = runnerSession.status === 'error' ? 'error' : 'active';
       session.deviceName = `${platform}:${kcpDevice.deviceUdid.slice(0, 12)}`;
@@ -479,13 +493,10 @@ export class DeviceService {
     await this.sessionRepo.save(session);
 
     try {
-      const runnerUrl = this.getRunnerUrl(onlineRunner);
-      this.logger.log(`Starting web session on runner: ${runnerUrl}/sessions`);
-
-      const res = await fetch(`${runnerUrl}/sessions`, {
-        method: 'POST',
-        headers: this.getRunnerHeaders(onlineRunner),
-        body: JSON.stringify({
+      // Prefer tunnel (cloud mode — KRC behind NAT)
+      if (this.runnerTunnel.isConnected(onlineRunner.id)) {
+        this.logger.log(`Starting web session via tunnel for runner ${onlineRunner.name}`);
+        const result = await this.runnerTunnel.sendCommand(onlineRunner.id, 'create-session', {
           platform: 'web',
           url: dto.url,
           fps: dto.fps || 2,
@@ -493,25 +504,47 @@ export class DeviceService {
           viewport: rc.viewport,
           browser: rc.browser,
           controlOptions: rc.controlOptions,
-        }),
-        signal: AbortSignal.timeout(30_000),
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        session.status = 'error';
-        session.errorMessage = `Runner returned ${res.status}: ${text.slice(0, 500)}`;
+        });
+        session.runnerSessionId = result.id;
+        session.status = 'active';
+        session.deviceName = 'web:browser';
         await this.sessionRepo.save(session);
-        throw new BadRequestException(session.errorMessage);
+        this.logger.log(`Web session started via tunnel: ${session.id} (runner session: ${result.id})`);
+      } else {
+        // Fallback: direct HTTP (local dev where KCD can reach KRC)
+        const runnerUrl = this.getRunnerUrl(onlineRunner);
+        this.logger.log(`Starting web session on runner: ${runnerUrl}/sessions`);
+
+        const res = await fetch(`${runnerUrl}/sessions`, {
+          method: 'POST',
+          headers: this.getRunnerHeaders(onlineRunner),
+          body: JSON.stringify({
+            platform: 'web',
+            url: dto.url,
+            fps: dto.fps || 2,
+            deviceType: dto.deviceType || rc.deviceType,
+            viewport: rc.viewport,
+            browser: rc.browser,
+            controlOptions: rc.controlOptions,
+          }),
+          signal: AbortSignal.timeout(30_000),
+        });
+
+        if (!res.ok) {
+          const text = await res.text();
+          session.status = 'error';
+          session.errorMessage = `Runner returned ${res.status}: ${text.slice(0, 500)}`;
+          await this.sessionRepo.save(session);
+          throw new BadRequestException(session.errorMessage);
+        }
+
+        const runnerSession: any = await res.json();
+        session.runnerSessionId = runnerSession.id;
+        session.status = 'active';
+        session.deviceName = 'web:browser';
+        await this.sessionRepo.save(session);
+        this.logger.log(`Web session started: ${session.id}`);
       }
-
-      const runnerSession: any = await res.json();
-      session.runnerSessionId = runnerSession.id;
-      session.status = 'active';
-      session.deviceName = 'web:browser';
-      await this.sessionRepo.save(session);
-
-      this.logger.log(`Web session started: ${session.id}`);
     } catch (err: any) {
       if (err instanceof BadRequestException) throw err;
       session.status = 'error';
@@ -589,7 +622,15 @@ export class DeviceService {
     if (session.runnerSessionId && session.status !== 'closed' && session.status !== 'error') {
       try {
         const runner = await this.runnerRepo.findOne({ where: { id: session.runnerId } });
-        if (runner) {
+        if (!runner) return;
+
+        // Prefer tunnel (cloud mode)
+        if (this.runnerTunnel.isConnected(runner.id)) {
+          await this.runnerTunnel.sendCommand(runner.id, 'close-session', {
+            sessionId: session.runnerSessionId,
+          }, 10_000);
+        } else {
+          // Fallback: direct HTTP (local dev)
           const runnerUrl = this.getRunnerUrl(runner);
           await fetch(`${runnerUrl}/sessions/${session.runnerSessionId}`, {
             method: 'DELETE',

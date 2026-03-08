@@ -42,6 +42,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DeviceSession } from './device-session.entity';
 import { Runner } from '../account/runner.entity';
+import { RunnerTunnelGateway } from './runner-tunnel.gateway';
 
 interface RunnerConnection {
   ws: WebSocket;
@@ -50,19 +51,31 @@ interface RunnerConnection {
   tenantId: string;
 }
 
+interface TunnelLink {
+  runnerId: string;
+  runnerSessionId: string;
+  sessionId: string;
+  tenantId: string;
+  unsubFrame: () => void;
+  unsubEvent: () => void;
+}
+
 @WebSocketGateway({ path: '/ws/device' })
 export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
   private logger = new Logger('DeviceGateway');
-  /** Map: dashboardClientId → RunnerConnection */
+  /** Map: dashboardClientId → RunnerConnection (direct WS to KRC) */
   private runnerLinks = new Map<any, RunnerConnection>();
+  /** Map: dashboardClientId → TunnelLink (via runner tunnel) */
+  private tunnelLinks = new Map<any, TunnelLink>();
 
   constructor(
     @InjectRepository(DeviceSession) private sessionRepo: Repository<DeviceSession>,
     @InjectRepository(Runner) private runnerRepo: Repository<Runner>,
     private jwtService: JwtService,
+    private runnerTunnel: RunnerTunnelGateway,
   ) {}
 
   /** Send a message to the dashboard client in { type, data } format. */
@@ -82,6 +95,12 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (link) {
       link.ws.close();
       this.runnerLinks.delete(client);
+    }
+    const tunnelLink = this.tunnelLinks.get(client);
+    if (tunnelLink) {
+      tunnelLink.unsubFrame();
+      tunnelLink.unsubEvent();
+      this.tunnelLinks.delete(client);
     }
   }
 
@@ -139,8 +158,6 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      const runnerHost = (runner.metadata as any)?.localApiHost || 'localhost';
-      const runnerPort = (runner.metadata as any)?.localApiPort || 5001;
       const runnerSessionId = session.runnerSessionId;
 
       if (!runnerSessionId) {
@@ -148,41 +165,74 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      // Connect to runner's WebSocket stream
-      const wsUrl = `ws://${runnerHost}:${runnerPort}/sessions/${runnerSessionId}/stream`;
-      this.logger.log(`Connecting to runner WS: ${wsUrl}`);
+      // Prefer tunnel (cloud mode — KRC behind NAT)
+      if (this.runnerTunnel.isConnected(runner.id)) {
+        this.logger.log(`Joining session ${sessionId} via tunnel (runner: ${runner.name})`);
 
-      const runnerWs = new WebSocket(wsUrl);
+        const unsubFrame = this.runnerTunnel.subscribeFrames(
+          runner.id,
+          runnerSessionId,
+          (frame: string) => {
+            this.sendToClient(client, 'frame', frame);
+          },
+        );
 
-      runnerWs.on('open', () => {
-        this.logger.log(`Connected to runner WS: ${wsUrl}`);
+        const unsubEvent = this.runnerTunnel.subscribeSessionEvents(
+          runner.id,
+          runnerSessionId,
+          (eventType: string, data: any) => {
+            this.sendToClient(client, eventType, data);
+          },
+        );
+
+        this.tunnelLinks.set(client, {
+          runnerId: runner.id,
+          runnerSessionId,
+          sessionId,
+          tenantId: payload.tenantId,
+          unsubFrame,
+          unsubEvent,
+        });
+
         this.sendToClient(client, 'status', 'connected');
-      });
+      } else {
+        // Fallback: direct WebSocket to runner (local dev)
+        const runnerHost = (runner.metadata as any)?.localApiHost || 'localhost';
+        const runnerPort = (runner.metadata as any)?.localApiPort || 5001;
+        const wsUrl = `ws://${runnerHost}:${runnerPort}/sessions/${runnerSessionId}/stream`;
+        this.logger.log(`Connecting to runner WS: ${wsUrl}`);
 
-      runnerWs.on('message', (raw: Buffer) => {
-        // Relay frames from runner to dashboard client (pass-through)
-        if (client.readyState === WebSocket.OPEN) {
-          client.send(raw.toString());
-        }
-      });
+        const runnerWs = new WebSocket(wsUrl);
 
-      runnerWs.on('error', (err) => {
-        this.logger.error(`Runner WS error (${wsUrl}): ${err.message}`);
-        this.sendToClient(client, 'error', `Runner connection error: ${err.message}`);
-      });
+        runnerWs.on('open', () => {
+          this.logger.log(`Connected to runner WS: ${wsUrl}`);
+          this.sendToClient(client, 'status', 'connected');
+        });
 
-      runnerWs.on('close', () => {
-        this.logger.log('Runner WS closed');
-        this.sendToClient(client, 'status', 'runner_disconnected');
-        this.runnerLinks.delete(client);
-      });
+        runnerWs.on('message', (raw: Buffer) => {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(raw.toString());
+          }
+        });
 
-      this.runnerLinks.set(client, {
-        ws: runnerWs,
-        sessionId,
-        runnerSessionId,
-        tenantId: payload.tenantId,
-      });
+        runnerWs.on('error', (err) => {
+          this.logger.error(`Runner WS error (${wsUrl}): ${err.message}`);
+          this.sendToClient(client, 'error', `Runner connection error: ${err.message}`);
+        });
+
+        runnerWs.on('close', () => {
+          this.logger.log('Runner WS closed');
+          this.sendToClient(client, 'status', 'runner_disconnected');
+          this.runnerLinks.delete(client);
+        });
+
+        this.runnerLinks.set(client, {
+          ws: runnerWs,
+          sessionId,
+          runnerSessionId,
+          tenantId: payload.tenantId,
+        });
+      }
     } catch (err: any) {
       this.logger.error(`Join handler error: ${err.message}`);
       this.sendToClient(client, 'error', err.message);
@@ -194,17 +244,31 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: any,
     @MessageBody() data: any,
   ) {
+    // Tunnel path
+    const tl = this.tunnelLinks.get(client);
+    if (tl) {
+      this.runnerTunnel.sendEvent(tl.runnerId, 'action', {
+        sessionId: tl.runnerSessionId,
+        action: data,
+      });
+      return;
+    }
+    // Direct WS path
     const link = this.runnerLinks.get(client);
     if (!link || link.ws.readyState !== WebSocket.OPEN) {
       this.sendToClient(client, 'error', 'Not connected to runner');
       return;
     }
-    // Forward action to runner (runner expects { type: 'action', data: {...} })
     link.ws.send(JSON.stringify({ type: 'action', data }));
   }
 
   @SubscribeMessage('record_start')
   async handleRecordStart(@ConnectedSocket() client: any) {
+    const tl = this.tunnelLinks.get(client);
+    if (tl) {
+      this.runnerTunnel.sendEvent(tl.runnerId, 'record-start', { sessionId: tl.runnerSessionId });
+      return;
+    }
     const link = this.runnerLinks.get(client);
     if (!link || link.ws.readyState !== WebSocket.OPEN) return;
     link.ws.send(JSON.stringify({ type: 'record_start' }));
@@ -212,6 +276,11 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('record_stop')
   async handleRecordStop(@ConnectedSocket() client: any) {
+    const tl = this.tunnelLinks.get(client);
+    if (tl) {
+      this.runnerTunnel.sendEvent(tl.runnerId, 'record-stop', { sessionId: tl.runnerSessionId });
+      return;
+    }
     const link = this.runnerLinks.get(client);
     if (!link || link.ws.readyState !== WebSocket.OPEN) return;
     link.ws.send(JSON.stringify({ type: 'record_stop' }));
@@ -222,6 +291,14 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: any,
     @MessageBody() data: { pageId: string },
   ) {
+    const tl = this.tunnelLinks.get(client);
+    if (tl) {
+      this.runnerTunnel.sendEvent(tl.runnerId, 'switch-page', {
+        sessionId: tl.runnerSessionId,
+        pageId: data.pageId,
+      });
+      return;
+    }
     const link = this.runnerLinks.get(client);
     if (!link || link.ws.readyState !== WebSocket.OPEN) return;
     link.ws.send(JSON.stringify({ type: 'switch_page', data }));
@@ -235,6 +312,12 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
    */
   @SubscribeMessage('webrtc_request')
   async handleWebRTCRequest(@ConnectedSocket() client: any) {
+    // WebRTC not supported over tunnel (requires direct P2P)
+    const tl = this.tunnelLinks.get(client);
+    if (tl) {
+      this.sendToClient(client, 'webrtc_available', { available: false, reason: 'tunnel_mode' });
+      return;
+    }
     const link = this.runnerLinks.get(client);
     if (!link || link.ws.readyState !== WebSocket.OPEN) {
       this.sendToClient(client, 'webrtc_error', 'Not connected to runner');
@@ -244,10 +327,6 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     link.ws.send(JSON.stringify({ type: 'webrtc_request' }));
   }
 
-  /**
-   * Client sends SDP answer (response to runner's SDP offer).
-   * Forward to the runner.
-   */
   @SubscribeMessage('sdp_answer')
   async handleSDPAnswer(
     @ConnectedSocket() client: any,
@@ -262,10 +341,6 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
     link.ws.send(JSON.stringify({ type: 'sdp_answer', data }));
   }
 
-  /**
-   * Client sends ICE candidate.
-   * Forward to the runner.
-   */
   @SubscribeMessage('ice_candidate')
   async handleICECandidate(
     @ConnectedSocket() client: any,

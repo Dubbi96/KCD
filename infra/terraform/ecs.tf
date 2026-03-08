@@ -202,7 +202,7 @@ resource "aws_ecs_task_definition" "kcd" {
         { name = "DB_USERNAME", value = var.db_username },
         { name = "DB_PASSWORD", value = var.db_password },
         { name = "JWT_SECRET", value = var.jwt_secret },
-        { name = "KCP_API_URL", value = "http://${aws_lb.kcp.dns_name}" },
+        { name = "KCP_API_URL", value = "http://${aws_lb.kcp.dns_name}/api" },
         { name = "KCP_SERVICE_TOKEN", value = var.kcp_service_token },
         { name = "NODE_ENV", value = var.environment },
       ]

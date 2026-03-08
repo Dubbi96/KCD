@@ -6,6 +6,7 @@ import { Runner } from '../account/runner.entity';
 import { DeviceService } from './device.service';
 import { DeviceController } from './device.controller';
 import { DeviceGateway } from './device.gateway';
+import { RunnerTunnelGateway } from './runner-tunnel.gateway';
 import { ScenarioModule } from '../scenario/scenario.module';
 import { AuthModule } from '../auth/auth.module';
 import { ControlPlaneModule } from '../control-plane/control-plane.module';
@@ -18,7 +19,7 @@ import { ControlPlaneModule } from '../control-plane/control-plane.module';
     ControlPlaneModule,
   ],
   controllers: [DeviceController],
-  providers: [DeviceService, DeviceGateway],
-  exports: [DeviceService],
+  providers: [DeviceService, DeviceGateway, RunnerTunnelGateway],
+  exports: [DeviceService, RunnerTunnelGateway],
 })
 export class DeviceModule {}
