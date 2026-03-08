@@ -16,8 +16,10 @@ import { StreamModule } from './stream/stream.module';
 import { TestDataModule } from './test-data/test-data.module';
 import { ControlPlaneModule } from './control-plane/control-plane.module';
 import { StorageModule } from './storage/storage.module';
+import { HealthController } from './health.controller';
 
 @Module({
+  controllers: [HealthController],
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
