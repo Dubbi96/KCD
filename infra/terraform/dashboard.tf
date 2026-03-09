@@ -77,6 +77,32 @@ resource "aws_s3_bucket_policy" "dashboard" {
 }
 
 # -----------------------------------------------------------------------------
+# CloudFront Function: SPA routing (rewrite non-file paths to /index.html)
+# -----------------------------------------------------------------------------
+resource "aws_cloudfront_function" "spa_rewrite" {
+  name    = "${var.project}-spa-rewrite"
+  runtime = "cloudfront-js-2.0"
+  comment = "Rewrite SPA routes to /index.html (only for S3 origin)"
+  publish = true
+
+  code = <<-EOF
+    function handler(event) {
+      var request = event.request;
+      var uri = request.uri;
+
+      // If the URI has a file extension (e.g. .js, .css, .png), pass through
+      if (uri.includes('.')) {
+        return request;
+      }
+
+      // Otherwise rewrite to /index.html for SPA client-side routing
+      request.uri = '/index.html';
+      return request;
+    }
+  EOF
+}
+
+# -----------------------------------------------------------------------------
 # CloudFront Distribution
 # -----------------------------------------------------------------------------
 resource "aws_cloudfront_distribution" "dashboard" {
@@ -130,6 +156,11 @@ resource "aws_cloudfront_distribution" "dashboard" {
     min_ttl     = 0
     default_ttl = 3600
     max_ttl     = 86400
+
+    function_association {
+      event_type   = "viewer-request"
+      function_arn = aws_cloudfront_function.spa_rewrite.arn
+    }
   }
 
   # ---------------------------------------------------------------------------
@@ -178,23 +209,6 @@ resource "aws_cloudfront_distribution" "dashboard" {
     min_ttl     = 0
     default_ttl = 0
     max_ttl     = 0
-  }
-
-  # ---------------------------------------------------------------------------
-  # Custom Error Responses (SPA routing)
-  # ---------------------------------------------------------------------------
-  custom_error_response {
-    error_code            = 403
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 10
-  }
-
-  custom_error_response {
-    error_code            = 404
-    response_code         = 200
-    response_page_path    = "/index.html"
-    error_caching_min_ttl = 10
   }
 
   # ---------------------------------------------------------------------------

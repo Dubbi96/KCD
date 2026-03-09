@@ -217,7 +217,7 @@ resource "aws_ecs_task_definition" "kcd" {
       }
 
       healthCheck = {
-        command     = ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' http://localhost:4000/api/v1 | grep -qE '^[2-4]' || exit 1"]
+        command     = ["CMD-SHELL", "curl -s -o /dev/null -w '%%{http_code}' http://localhost:4000/api/v1 | grep -qE '^[2-4]' || exit 1"]
         interval    = 30
         timeout     = 5
         retries     = 3

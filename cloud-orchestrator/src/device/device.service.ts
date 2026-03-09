@@ -126,13 +126,17 @@ export class DeviceService {
     const localDevices = await this.deviceRepo.find({ where: { tenantId } });
     const localMap = new Map(localDevices.map(d => [d.deviceUdid, d]));
 
+    const runnerById = new Map(runners.map(r => [r.id, r]));
+
     return kcpDevices.map((d: any) => {
       const node = nodeMap.get(d.nodeId);
       const hostKey = node ? `${node.host}:${node.port}` : '';
-      const runner = runnerByHost.get(hostKey);
+      const localDevice = localMap.get(d.deviceUdid);
+      // Resolve runner: prefer runnerId from device record, then host:port match
+      const runner = (localDevice?.runnerId ? runnerById.get(localDevice.runnerId) : undefined)
+        || runnerByHost.get(hostKey);
       const isOnline = node?.status === 'online';
       const globalBorrow = globalBorrowMap.get(d.deviceUdid);
-      const localDevice = localMap.get(d.deviceUdid);
 
       return {
         id: d.id,
@@ -300,18 +304,30 @@ export class DeviceService {
       });
     }
 
-    // 3. Find runner
-    const nodes: any[] = (await this.cpService.getNodes()) || [];
-    const node = nodes.find((n: any) => n.id === kcpDevice.nodeId);
-    if (!node || node.status !== 'online') {
-      throw new BadRequestException('Node hosting this device is offline');
+    // 3. Find runner — prefer runnerId from local device record (set by heartbeat sync),
+    //    then fall back to KCP node host:port matching, then any online runner.
+    const runners = await this.runnerRepo.find({ where: { tenantId } });
+    let runner: Runner | undefined;
+
+    // 3a. Match by runnerId from the device record (most reliable)
+    if (localDevice?.runnerId) {
+      runner = runners.find((r) => r.id === localDevice!.runnerId);
     }
 
-    const runners = await this.runnerRepo.find({ where: { tenantId } });
-    let runner = runners.find((r) => {
-      const meta = r.metadata as any;
-      return meta?.localApiHost === node.host && meta?.localApiPort === node.port;
-    });
+    // 3b. Match by KCP node host:port
+    if (!runner) {
+      const nodes: any[] = (await this.cpService.getNodes()) || [];
+      const node = nodes.find((n: any) => n.id === kcpDevice.nodeId);
+      if (!node || node.status !== 'online') {
+        throw new BadRequestException('Node hosting this device is offline');
+      }
+      runner = runners.find((r) => {
+        const meta = r.metadata as any;
+        return meta?.localApiHost === node.host && meta?.localApiPort === node.port;
+      });
+    }
+
+    // 3c. Fallback: any runner with recent heartbeat
     if (!runner) {
       runner = runners.find(
         (r) => r.lastHeartbeatAt && Date.now() - new Date(r.lastHeartbeatAt).getTime() < 90_000,
