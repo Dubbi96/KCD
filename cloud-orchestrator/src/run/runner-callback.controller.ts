@@ -187,4 +187,14 @@ export class RunnerCallbackController {
       mode: body.mode || 'single',
     });
   }
+
+  @Get('runs/:id')
+  @ApiOperation({ summary: 'Get run detail with scenario runs' })
+  async getRunDetail(
+    @Param('id') runId: string,
+    @Headers('x-runner-token') token: string,
+  ) {
+    const runner = await this.validateToken(token);
+    return this.runService.getRunDetail(runner.tenantId, runId);
+  }
 }
