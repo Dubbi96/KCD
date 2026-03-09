@@ -16,6 +16,11 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule);
 
+  // Increase JSON body limit for runner callbacks with large resultJson (screenshots, step data)
+  const expressApp = app.getHttpAdapter().getInstance();
+  const bodyParser = require('body-parser');
+  expressApp.use(bodyParser.json({ limit: '50mb' }));
+
   // CORS: restrict to allowed origins; fall back to localhost in dev only
   const allowedOrigins = process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(',').map((o) => o.trim())
