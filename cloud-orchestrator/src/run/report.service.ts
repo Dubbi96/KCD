@@ -264,9 +264,9 @@ export class ReportService {
               ? `<div style="font-size:11px;color:#a371f7;margin-top:4px;">&#128204; ${Object.entries(step.capturedVariables).map(([k, v]) => `<b>${escapeHtml(k)}</b>=${escapeHtml(String(v).substring(0, 100))}`).join(', ')}</div>`
               : '';
 
-            // Screenshot (base64 embedded)
+            // Screenshot thumbnail (click to expand)
             const screenshotHtml = step.screenshotBase64
-              ? `<div style="margin-top:8px;"><img src="data:image/png;base64,${step.screenshotBase64}" style="max-width:100%;max-height:400px;border:1px solid #30363d;border-radius:6px;${step.status === 'failed' ? 'border:2px solid #f85149;' : ''}" alt="Step ${stepIdx + 1} screenshot"></div>`
+              ? `<div style="margin-top:8px;"><img src="data:image/jpeg;base64,${step.screenshotBase64}" style="max-width:240px;max-height:160px;border:1px solid #30363d;border-radius:6px;cursor:pointer;${step.status === 'failed' ? 'border:2px solid #f85149;' : ''}" alt="Step ${stepIdx + 1}" onclick="if(this.style.maxWidth==='240px'){this.style.maxWidth='100%';this.style.maxHeight='none';}else{this.style.maxWidth='240px';this.style.maxHeight='160px';}"></div>`
               : '';
 
             return `
