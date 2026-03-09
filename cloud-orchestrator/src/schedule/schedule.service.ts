@@ -60,8 +60,23 @@ export class ScheduleService {
 
   async update(tenantId: string, id: string, dto: Partial<CreateScheduleDto>) {
     const schedule = await this.findOne(tenantId, id);
+    const oldRunAt = schedule.runAt;
     Object.assign(schedule, dto);
-    return this.scheduleRepo.save(schedule);
+    const saved = await this.scheduleRepo.save(schedule);
+
+    // Re-create PlannedRun when AT schedule's runAt changes or schedule is re-enabled
+    if (saved.type === 'AT' && saved.runAt && saved.enabled &&
+        (saved.runAt !== oldRunAt || (dto.enabled === true))) {
+      const planned = this.plannedRunRepo.create({
+        tenantId,
+        scheduleId: saved.id,
+        streamId: saved.streamId,
+        plannedAt: saved.runAt,
+      });
+      await this.plannedRunRepo.save(planned);
+    }
+
+    return saved;
   }
 
   async remove(tenantId: string, id: string) {
