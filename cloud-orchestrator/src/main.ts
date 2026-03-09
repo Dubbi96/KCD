@@ -14,12 +14,14 @@ async function bootstrap() {
     console.warn('WARNING: JWT_SECRET not set — using insecure default. Set JWT_SECRET before deploying to production.');
   }
 
-  const app = await NestFactory.create(AppModule);
+  // Disable NestJS's default body parser (100KB limit) so we can set a higher limit
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
 
-  // Increase JSON body limit for runner callbacks with large resultJson (screenshots, step data)
-  const expressApp = app.getHttpAdapter().getInstance();
+  // Add body parsers FIRST with increased limit for runner callbacks (large resultJson with screenshots)
   const bodyParser = require('body-parser');
+  const expressApp = app.getHttpAdapter().getInstance();
   expressApp.use(bodyParser.json({ limit: '50mb' }));
+  expressApp.use(bodyParser.urlencoded({ extended: true, limit: '50mb' }));
 
   // CORS: restrict to allowed origins; fall back to localhost in dev only
   const allowedOrigins = process.env.CORS_ORIGIN

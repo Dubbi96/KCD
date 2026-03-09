@@ -108,6 +108,10 @@ export class RunnerCallbackController {
     },
   ) {
     const runner = await this.validateToken(token);
+    const hasResult = !!body.resultJson;
+    const eventCount = body.resultJson?.events?.length ?? 0;
+    const assertionCount = body.resultJson?.assertionsSummary?.total ?? 0;
+    console.log(`[RunnerCallback] reportCompleted: scenarioRunId=${scenarioRunId}, status=${body.status}, hasResultJson=${hasResult}, events=${eventCount}, assertions=${assertionCount}`);
     return this.runService.updateScenarioRunStatus(scenarioRunId, body.status, {
       durationMs: body.durationMs,
       error: body.error,
