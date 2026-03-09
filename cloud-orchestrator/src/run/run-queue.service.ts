@@ -10,6 +10,7 @@ export interface ScenarioJobPayload {
   platform: 'web' | 'ios' | 'android';
   options: Record<string, any>;
   attempt: number;
+  requiredLabels?: string[];
 }
 
 /**
@@ -37,6 +38,7 @@ export class RunQueueService {
         options: payload.options,
         attempt: payload.attempt,
       },
+      requiredLabels: payload.requiredLabels,
     });
 
     if (!job?.id) {

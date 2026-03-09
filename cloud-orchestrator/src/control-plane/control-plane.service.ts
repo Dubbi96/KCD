@@ -91,6 +91,7 @@ export class ControlPlaneService {
     platform: string;
     payload: Record<string, any>;
     priority?: number;
+    requiredLabels?: string[];
   }): Promise<{ id: string } | null> {
     return this.request('/jobs', 'POST', params);
   }

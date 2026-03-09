@@ -91,6 +91,7 @@ export class RunService {
           platform: sr.platform as any,
           options: dto.options || {},
           attempt: 1,
+          requiredLabels: (dto.options as any)?.requiredLabels,
         });
         if (kcpJobId) {
           sr.kcpJobId = kcpJobId;
