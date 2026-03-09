@@ -6,10 +6,13 @@ import {
   Param,
   Query,
   Headers,
+  Res,
   UnauthorizedException,
 } from '@nestjs/common';
+import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { RunService } from './run.service';
+import { ReportService } from './report.service';
 import { AccountService } from '../account/account.service';
 import { ScenarioService } from '../scenario/scenario.service';
 import { AuthProfileService } from '../auth-profile/auth-profile.service';
@@ -24,6 +27,7 @@ import { DeviceService } from '../device/device.service';
 export class RunnerCallbackController {
   constructor(
     private runService: RunService,
+    private reportService: ReportService,
     private accountService: AccountService,
     private scenarioService: ScenarioService,
     private authProfileService: AuthProfileService,
@@ -196,5 +200,18 @@ export class RunnerCallbackController {
   ) {
     const runner = await this.validateToken(token);
     return this.runService.getRunDetail(runner.tenantId, runId);
+  }
+
+  @Get('runs/:id/report/html')
+  @ApiOperation({ summary: 'Get HTML report via runner token' })
+  async getHtmlReport(
+    @Param('id') runId: string,
+    @Headers('x-runner-token') token: string,
+    @Res() res: Response,
+  ) {
+    const runner = await this.validateToken(token);
+    const html = await this.reportService.generateHtmlReport(runner.tenantId, runId);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
   }
 }
