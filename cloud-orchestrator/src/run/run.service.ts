@@ -360,10 +360,13 @@ export class RunService {
       }).catch((err) => this.logger.error(`Webhook emit error: ${err.message}`));
     }
 
-    // Update PlannedRun status to DONE/FAILED
+    // Update PlannedRun status to DONE (must await — overlap policy checks for RUNNING status)
     if (run.plannedRunId) {
-      this.updatePlannedRunStatus(run.plannedRunId, run.status)
-        .catch((err) => this.logger.error(`PlannedRun update error: ${err.message}`));
+      try {
+        await this.updatePlannedRunStatus(run.plannedRunId, run.status);
+      } catch (err: any) {
+        this.logger.error(`PlannedRun update error: ${err.message}`);
+      }
     }
 
     // Process AFTER triggers — fire schedules that depend on this stream's completion
@@ -380,7 +383,9 @@ export class RunService {
   private async updatePlannedRunStatus(plannedRunId: string, runStatus: string) {
     const { PlannedRun } = await import('../schedule/planned-run.entity');
     const plannedRunRepo = this.runRepo.manager.getRepository(PlannedRun);
-    const status = runStatus === 'completed' ? 'DONE' : 'SKIPPED';
+    // DONE for both completed and failed (the run did execute).
+    // SKIPPED is only for runs that were never executed.
+    const status = ['completed', 'failed'].includes(runStatus) ? 'DONE' : 'SKIPPED';
     await plannedRunRepo.update(plannedRunId, { status: status as any });
   }
 

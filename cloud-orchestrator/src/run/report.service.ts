@@ -60,7 +60,33 @@ export class ReportService {
 
     const scenarioResults: ScenarioResult[] = scenarioRuns.map((sr) => {
       const resultJson = sr.resultJson || {};
-      const stepResults: any[] = resultJson.stepResults || [];
+      // KRC sends events (EventResult[]), legacy format uses stepResults
+      const rawSteps: any[] = resultJson.events || resultJson.stepResults || [];
+      // Normalize field names: KRC EventResult → report step format
+      const stepResults: any[] = rawSteps.map((ev: any) => ({
+        type: ev.eventType || ev.type || ev.action || '-',
+        selector: ev.resolvedBy || ev.selector || ev.target || '-',
+        status: ev.status || '-',
+        durationMs: ev.duration ?? ev.durationMs ?? null,
+        description: ev.description || ev.stepNo ? `Step ${ev.stepNo || ''}${ev.description ? ': ' + ev.description : ''}` : '',
+        error: ev.error || null,
+        // Assertions: KRC sends assertionResults, legacy sends assertions
+        assertions: (ev.assertionResults || ev.assertions || []).map((a: any) => ({
+          type: a.assertion?.type || a.type || 'assertion',
+          expected: a.assertion?.expected || a.expected || '',
+          actual: a.actual || '',
+          passed: a.passed ?? (a.status === 'passed'),
+          error: a.error || '',
+          message: a.error || (a.assertion ? `${a.assertion.type}: expected "${a.assertion.expected}"${a.actual ? ` (actual: ${a.actual})` : ''}` : a.message || ''),
+        })),
+        // Screenshot base64 for report rendering
+        screenshotBase64: ev.artifacts?.screenshotBase64 || null,
+        // API response details
+        apiResponse: ev.apiResponse || null,
+        // Captured variables
+        capturedVariables: ev.capturedVariables || null,
+      }));
+
       const capturedVariables: Record<string, any> =
         resultJson.variables || resultJson.capturedVariables || {};
 
@@ -206,24 +232,52 @@ export class ReportService {
               .map(
                 (a: any) =>
                   `<div style="margin-left:24px;padding:2px 0;font-size:12px;color:${
-                    a.status === 'passed' || a.passed === true
-                      ? '#3fb950'
-                      : '#f85149'
+                    a.passed === true ? '#3fb950' : '#f85149'
                   };">${
-                    a.status === 'passed' || a.passed === true ? '&#10003;' : '&#10007;'
-                  } ${escapeHtml(a.message || a.description || a.type || 'assertion')}</div>`,
+                    a.passed === true ? '&#10003;' : '&#10007;'
+                  } <b>${escapeHtml(a.type || 'assertion')}</b>: expected "${escapeHtml(a.expected || '')}"${
+                    a.actual ? ` (actual: ${escapeHtml(String(a.actual))})` : ''
+                  }${!a.passed && a.error ? ` — ${escapeHtml(a.error)}` : ''}</div>`,
               )
               .join('');
+
+            // Step description
+            const descHtml = step.description
+              ? `<div style="font-size:12px;color:#c9d1d9;margin-top:4px;">${escapeHtml(step.description)}</div>`
+              : '';
+
+            // Error detail
+            const errorHtml = step.error
+              ? `<div style="font-size:12px;color:#f85149;margin-top:4px;">&#10007; ${escapeHtml(step.error)}</div>`
+              : '';
+
+            // API response
+            const apiHtml = step.apiResponse
+              ? `<div style="margin-top:6px;background:#161b22;border:1px solid #30363d;border-radius:4px;padding:6px 10px;font-family:monospace;font-size:11px;">
+                  <span style="color:#8b949e;">HTTP</span> <span style="color:${step.apiResponse.status >= 400 ? '#f85149' : '#3fb950'}">${step.apiResponse.status}</span>
+                  <span style="color:#8b949e;margin-left:8px;">${step.apiResponse.duration || 0}ms</span>
+                </div>`
+              : '';
+
+            // Captured variables
+            const capturedHtml = step.capturedVariables
+              ? `<div style="font-size:11px;color:#a371f7;margin-top:4px;">&#128204; ${Object.entries(step.capturedVariables).map(([k, v]) => `<b>${escapeHtml(k)}</b>=${escapeHtml(String(v).substring(0, 100))}`).join(', ')}</div>`
+              : '';
+
+            // Screenshot (base64 embedded)
+            const screenshotHtml = step.screenshotBase64
+              ? `<div style="margin-top:8px;"><img src="data:image/png;base64,${step.screenshotBase64}" style="max-width:100%;max-height:400px;border:1px solid #30363d;border-radius:6px;${step.status === 'failed' ? 'border:2px solid #f85149;' : ''}" alt="Step ${stepIdx + 1} screenshot"></div>`
+              : '';
 
             return `
               <tr style="border-bottom:1px solid #21262d;">
                 <td style="padding:8px 12px;color:#8b949e;">${stepIdx + 1}</td>
-                <td style="padding:8px 12px;">${escapeHtml(step.type || step.action || '-')}</td>
-                <td style="padding:8px 12px;font-family:monospace;font-size:12px;color:#79c0ff;">${escapeHtml(step.selector || step.target || '-')}</td>
+                <td style="padding:8px 12px;">${escapeHtml(step.type || '-')}</td>
+                <td style="padding:8px 12px;font-family:monospace;font-size:12px;color:#79c0ff;">${escapeHtml(step.selector || '-')}</td>
                 <td style="padding:8px 12px;">${stepStatusBadge(step.status || '-')}</td>
-                <td style="padding:8px 12px;color:#8b949e;">${formatDuration(step.durationMs ?? step.duration ?? null)}</td>
+                <td style="padding:8px 12px;color:#8b949e;">${formatDuration(step.durationMs ?? null)}</td>
               </tr>
-              ${assertionRows ? `<tr><td colspan="5" style="padding:0 0 8px 0;">${assertionRows}</td></tr>` : ''}`;
+              ${descHtml || errorHtml || assertionRows || apiHtml || capturedHtml || screenshotHtml ? `<tr><td colspan="5" style="padding:0 12px 8px 48px;">${descHtml}${errorHtml}${assertionRows}${apiHtml}${capturedHtml}${screenshotHtml}</td></tr>` : ''}`;
           })
           .join('');
 
