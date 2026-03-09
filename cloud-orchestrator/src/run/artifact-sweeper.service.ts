@@ -2,18 +2,19 @@ import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/commo
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ScenarioRun } from './scenario-run.entity';
+import { Run } from './run.entity';
 import { StorageSettings } from '../storage/storage-settings.entity';
 
 /**
  * ArtifactSweeperService — S3-aware TTL 기반 resultJson 정리
  *
- * S3 설정된 테넌트: 로컬 데이터는 이미 업로드되었으므로 공격적으로 정리
+ * S3 설정된 테넌트이면서 S3 report가 실제로 업로드된 run만 공격적으로 정리
  *   - PASS: 1시간 후 삭제
  *   - FAIL: 24시간 후 삭제
  *
- * S3 미설정 테넌트: 로컬 데이터가 유일한 소스
- *   - PASS: 24시간 후 삭제
- *   - FAIL: 7일 후 삭제
+ * S3 미설정 테넌트 또는 S3 업로드 실패한 run:
+ *   - PASS: 7일 후 삭제
+ *   - FAIL: 30일 후 삭제
  */
 @Injectable()
 export class ArtifactSweeperService implements OnModuleInit, OnModuleDestroy {
@@ -27,13 +28,15 @@ export class ArtifactSweeperService implements OnModuleInit, OnModuleDestroy {
   private readonly S3_PASS_TTL_MS = 1 * 60 * 60 * 1000;       // 1 hour
   private readonly S3_FAIL_TTL_MS = 24 * 60 * 60 * 1000;      // 24 hours
 
-  /** No S3: data is only local */
-  private readonly LOCAL_PASS_TTL_MS = 24 * 60 * 60 * 1000;   // 24 hours
-  private readonly LOCAL_FAIL_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+  /** No S3 or S3 upload failed: data is the only source for reports */
+  private readonly LOCAL_PASS_TTL_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
+  private readonly LOCAL_FAIL_TTL_MS = 30 * 24 * 60 * 60 * 1000;  // 30 days
 
   constructor(
     @InjectRepository(ScenarioRun)
     private scenarioRunRepo: Repository<ScenarioRun>,
+    @InjectRepository(Run)
+    private runRepo: Repository<Run>,
     @InjectRepository(StorageSettings)
     private storageSettingsRepo: Repository<StorageSettings>,
   ) {}
@@ -65,36 +68,48 @@ export class ArtifactSweeperService implements OnModuleInit, OnModuleDestroy {
       .getRawMany();
     const s3TenantIds: string[] = s3Settings.map((s: any) => s.tenantId);
 
-    // 2. S3-configured tenants: aggressive cleanup
+    // 2. S3-configured tenants: aggressive cleanup ONLY for runs with actual S3 report URLs
     if (s3TenantIds.length > 0) {
-      const s3PassThreshold = new Date(now - this.S3_PASS_TTL_MS);
-      const s3FailThreshold = new Date(now - this.S3_FAIL_TTL_MS);
+      // Find runs that have S3 report URLs (starts with http, not /api/v1 fallback)
+      const s3Runs = await this.runRepo
+        .createQueryBuilder('r')
+        .select('r.id')
+        .where('r.tenant_id IN (:...tenantIds)', { tenantIds: s3TenantIds })
+        .andWhere('r.report_url IS NOT NULL')
+        .andWhere("r.report_url LIKE 'http%'")
+        .getMany();
+      const s3RunIds = s3Runs.map(r => r.id);
 
-      const s3PassCleared = await this.scenarioRunRepo
-        .createQueryBuilder()
-        .update()
-        .set({ resultJson: () => 'NULL' })
-        .where('status = :status', { status: 'passed' })
-        .andWhere('result_json IS NOT NULL')
-        .andWhere('completed_at < :threshold', { threshold: s3PassThreshold })
-        .andWhere('tenant_id IN (:...tenantIds)', { tenantIds: s3TenantIds })
-        .execute();
+      if (s3RunIds.length > 0) {
+        const s3PassThreshold = new Date(now - this.S3_PASS_TTL_MS);
+        const s3FailThreshold = new Date(now - this.S3_FAIL_TTL_MS);
 
-      const s3FailCleared = await this.scenarioRunRepo
-        .createQueryBuilder()
-        .update()
-        .set({ resultJson: () => 'NULL' })
-        .where('status IN (:...statuses)', { statuses: ['failed', 'infra_failed'] })
-        .andWhere('result_json IS NOT NULL')
-        .andWhere('completed_at < :threshold', { threshold: s3FailThreshold })
-        .andWhere('tenant_id IN (:...tenantIds)', { tenantIds: s3TenantIds })
-        .execute();
+        const s3PassCleared = await this.scenarioRunRepo
+          .createQueryBuilder()
+          .update()
+          .set({ resultJson: () => 'NULL' })
+          .where('status = :status', { status: 'passed' })
+          .andWhere('result_json IS NOT NULL')
+          .andWhere('completed_at < :threshold', { threshold: s3PassThreshold })
+          .andWhere('run_id IN (:...runIds)', { runIds: s3RunIds })
+          .execute();
 
-      const s3Total = (s3PassCleared.affected || 0) + (s3FailCleared.affected || 0);
-      if (s3Total > 0) {
-        this.logger.log(`S3 tenants: swept ${s3Total} artifacts (pass: ${s3PassCleared.affected}, fail: ${s3FailCleared.affected})`);
+        const s3FailCleared = await this.scenarioRunRepo
+          .createQueryBuilder()
+          .update()
+          .set({ resultJson: () => 'NULL' })
+          .where('status IN (:...statuses)', { statuses: ['failed', 'infra_failed'] })
+          .andWhere('result_json IS NOT NULL')
+          .andWhere('completed_at < :threshold', { threshold: s3FailThreshold })
+          .andWhere('run_id IN (:...runIds)', { runIds: s3RunIds })
+          .execute();
+
+        const s3Total = (s3PassCleared.affected || 0) + (s3FailCleared.affected || 0);
+        if (s3Total > 0) {
+          this.logger.log(`S3 tenants: swept ${s3Total} artifacts (pass: ${s3PassCleared.affected}, fail: ${s3FailCleared.affected})`);
+        }
+        totalCleared += s3Total;
       }
-      totalCleared += s3Total;
     }
 
     // 3. Non-S3 tenants: standard TTL
