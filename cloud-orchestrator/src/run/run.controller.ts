@@ -32,7 +32,7 @@ export class RunController {
   @Post()
   @ApiOperation({ summary: 'Create a new test run and enqueue to runner' })
   createRun(@CurrentUser() user: JwtPayload, @Body() dto: CreateRunDto) {
-    return this.runService.createRun(user.tenantId, dto);
+    return this.runService.createRun(user.tenantId, dto, user.sub);
   }
 
   @Get()

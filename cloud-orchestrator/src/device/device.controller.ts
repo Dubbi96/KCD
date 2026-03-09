@@ -28,7 +28,7 @@ export class DeviceController {
   @Get()
   @ApiOperation({ summary: 'List all registered devices in the resource pool' })
   async listDevices(@Request() req: any) {
-    return this.deviceService.listDevices(req.user.tenantId);
+    return this.deviceService.listDevices(req.user.tenantId, req.user.sub);
   }
 
   // ─── Borrow / Return (device reservation) ────────

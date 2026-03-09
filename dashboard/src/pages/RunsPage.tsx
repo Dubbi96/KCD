@@ -59,7 +59,16 @@ export default function RunsPage() {
       load(0);
       setPage(0);
     } catch (err: any) {
-      alert(err.message);
+      const msg: string = err.message || '';
+      if (msg.includes('디바이스') && msg.includes('대여')) {
+        if (confirm(`${msg}\n\nDevices 페이지로 이동하시겠습니까?`)) {
+          setShowCreate(false);
+          navigate('/devices');
+          return;
+        }
+      } else {
+        alert(msg);
+      }
     } finally {
       setSaving(false);
     }

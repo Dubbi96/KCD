@@ -53,6 +53,10 @@ export default function DevicesPage() {
   // ─── Borrow / Return (device reservation) ─────
 
   const handleBorrow = async (device: any) => {
+    if (device.borrowedBy && !device.borrowedByMe) {
+      alert('이 디바이스는 이미 다른 사용자가 대여 중입니다.');
+      return;
+    }
     setBorrowingId(device.id);
     try {
       await api.borrowDevice(device.id);
@@ -124,7 +128,7 @@ export default function DevicesPage() {
   const iosDevices = devices.filter(d => d.platform === 'ios');
   const androidDevices = devices.filter(d => d.platform === 'android');
   const physicalDevices = [...iosDevices, ...androidDevices];
-  const borrowedDevices = devices.filter(d => d.borrowedBy);
+  const borrowedDevices = devices.filter(d => d.borrowedByMe);
   const activeSessions = sessions.filter(s => s.status !== 'closed' && s.status !== 'error');
   // Orphaned sessions: active sessions not tied to a currently borrowed device (e.g. web sessions, or device was returned but session lingered)
   const borrowedDeviceUdids = new Set(borrowedDevices.map(d => d.deviceUdid));
@@ -508,8 +512,13 @@ function DeviceCard({
   borrowing: boolean;
   borrowBgClass?: string;
 }) {
+  const isBorrowedByOther = device.status === 'in_use' && !device.borrowedByMe;
+  const isUnavailable = device.status === 'in_use' || device.status === 'offline';
+
   return (
-    <div className="bg-card rounded-xl border border-border p-4 hover:border-border/80 transition-colors">
+    <div className={`bg-card rounded-xl border border-border p-4 transition-colors ${
+      isBorrowedByOther ? 'opacity-50 pointer-events-none' : 'hover:border-border/80'
+    }`}>
       <div className="flex items-center gap-3 mb-3">
         <div className={`p-2.5 rounded-lg ${platformBgClass}`}>{platformIcon}</div>
         <div className="flex-1 min-w-0">
@@ -534,7 +543,7 @@ function DeviceCard({
           </button>
         ) : device.status === 'in_use' ? (
           <span className="text-yellow-400/70 text-[10px] flex items-center gap-1">
-            <Lock size={9} /> 대여됨
+            <Lock size={9} /> {isBorrowedByOther ? '다른 사용자 대여 중' : '대여됨'}
           </span>
         ) : (
           <span className="text-gray-500 text-[10px]">Offline</span>

@@ -62,6 +62,6 @@ export class GroupController {
       platform: body.platform || 'web',
       options: group.options || {},
       runnerId: body.runnerId,
-    });
+    }, user.sub);
   }
 }

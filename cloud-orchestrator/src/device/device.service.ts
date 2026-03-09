@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, Not, IsNull } from 'typeorm';
 import { Device } from './device.entity';
 import { DeviceSession } from './device-session.entity';
 import { Runner } from '../account/runner.entity';
@@ -100,7 +100,7 @@ export class DeviceService {
 
   // ─── Device Listing ─────────────────────────────────
 
-  async listDevices(tenantId: string) {
+  async listDevices(tenantId: string, userId?: string) {
     // KCP = source of truth for device inventory
     const kcpDevices: any[] = await this.cpService.getDevices();
     const runners = await this.runnerRepo.find({ where: { tenantId } });
@@ -116,16 +116,23 @@ export class DeviceService {
     const nodes: any[] = (await this.cpService.getNodes()) || [];
     const nodeMap = new Map(nodes.map((n: any) => [n.id, n]));
 
-    // Load local device borrow state
+    // Load borrow state globally (across all tenants) to prevent cross-tenant conflicts
+    const borrowedDevices = await this.deviceRepo.find({
+      where: { borrowedBy: Not(IsNull()) },
+    });
+    const globalBorrowMap = new Map(borrowedDevices.map(d => [d.deviceUdid, d]));
+
+    // Also load current tenant's device records for session info
     const localDevices = await this.deviceRepo.find({ where: { tenantId } });
-    const borrowMap = new Map(localDevices.map(d => [d.deviceUdid, d]));
+    const localMap = new Map(localDevices.map(d => [d.deviceUdid, d]));
 
     return kcpDevices.map((d: any) => {
       const node = nodeMap.get(d.nodeId);
       const hostKey = node ? `${node.host}:${node.port}` : '';
       const runner = runnerByHost.get(hostKey);
       const isOnline = node?.status === 'online';
-      const localDevice = borrowMap.get(d.deviceUdid);
+      const globalBorrow = globalBorrowMap.get(d.deviceUdid);
+      const localDevice = localMap.get(d.deviceUdid);
 
       return {
         id: d.id,
@@ -134,9 +141,10 @@ export class DeviceService {
         name: d.name,
         model: d.model || d.osVersion,
         version: d.osVersion,
-        status: localDevice?.borrowedBy ? 'in_use' : (isOnline ? d.status : 'offline'),
-        borrowedBy: localDevice?.borrowedBy || null,
-        borrowedAt: localDevice?.borrowedAt || null,
+        status: globalBorrow ? 'in_use' : (isOnline ? d.status : 'offline'),
+        borrowedBy: globalBorrow?.borrowedBy || null,
+        borrowedByMe: userId ? globalBorrow?.borrowedBy === userId : false,
+        borrowedAt: globalBorrow?.borrowedAt || null,
         activeSessionId: localDevice?.activeSessionId || null,
         lastSeenAt: d.lastSeenAt,
         runnerId: runner?.id,
@@ -167,14 +175,18 @@ export class DeviceService {
       throw new BadRequestException('Device is offline — runner may be disconnected');
     }
 
-    // 2. Check local borrow state
+    // 2. Check borrow state globally (any tenant) to prevent cross-tenant conflicts
+    const existingBorrow = await this.deviceRepo.findOne({
+      where: { deviceUdid: kcpDevice.deviceUdid, borrowedBy: Not(IsNull()) },
+    });
+    if (existingBorrow) {
+      throw new BadRequestException('이 디바이스는 이미 다른 사용자가 대여 중입니다.');
+    }
+
+    // Find or create local device record for this tenant
     let localDevice = await this.deviceRepo.findOne({
       where: { deviceUdid: kcpDevice.deviceUdid, tenantId },
     });
-
-    if (localDevice?.borrowedBy) {
-      throw new BadRequestException('Device is already borrowed');
-    }
 
     // 3. Create/update local device record with borrow info
     if (!localDevice) {
@@ -361,7 +373,24 @@ export class DeviceService {
       // Prefer tunnel (cloud mode — KRC behind NAT)
       if (this.runnerTunnel.isConnected(runner.id)) {
         this.logger.log(`Creating session via tunnel on runner ${runner.name} for device ${kcpDevice.deviceUdid}`);
-        runnerSession = await this.runnerTunnel.sendCommand(runner.id, 'create-session', sessionPayload);
+        try {
+          runnerSession = await this.runnerTunnel.sendCommand(runner.id, 'create-session', sessionPayload);
+        } catch (tunnelErr: any) {
+          const msg = tunnelErr.message || '';
+          if (msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('not reachable')) {
+            session.status = 'error';
+            session.errorMessage = `Runner에서 Appium 서버에 연결할 수 없습니다. Appium이 시작되었는지 확인해주세요.`;
+            await this.sessionRepo.save(session).catch(() => {});
+            throw new BadRequestException(session.errorMessage);
+          }
+          if (msg.includes('timed out')) {
+            session.status = 'error';
+            session.errorMessage = `세션 생성 시간이 초과되었습니다. WDA/Appium 빌드에 시간이 걸릴 수 있습니다. 잠시 후 다시 시도해주세요.`;
+            await this.sessionRepo.save(session).catch(() => {});
+            throw new BadRequestException(session.errorMessage);
+          }
+          throw tunnelErr;
+        }
       } else {
         // Fallback: direct HTTP (local dev)
         const runnerUrl = this.getRunnerUrl(runner);
@@ -415,9 +444,21 @@ export class DeviceService {
     } catch (err: any) {
       if (err instanceof BadRequestException) throw err;
       session.status = 'error';
-      session.errorMessage = err.message;
+      const rawMsg = err.message || 'Unknown error';
+      // Provide actionable error message for common KRC failures
+      let userMsg: string;
+      if (rawMsg.includes('fetch failed') || rawMsg.includes('ECONNREFUSED')) {
+        userMsg = `Runner에서 Appium 서버에 연결할 수 없습니다. KRC가 정상 실행 중인지, Appium이 시작되었는지 확인해주세요. (${rawMsg})`;
+      } else if (rawMsg.includes('tunnel not connected')) {
+        userMsg = `Runner 터널이 연결되어 있지 않습니다. KRC가 실행 중인지 확인해주세요.`;
+      } else if (rawMsg.includes('timed out')) {
+        userMsg = `Runner 응답 시간이 초과되었습니다. Appium 세션 생성에 시간이 오래 걸릴 수 있습니다. 다시 시도해주세요.`;
+      } else {
+        userMsg = `세션 생성 실패: ${rawMsg}`;
+      }
+      session.errorMessage = userMsg;
       await this.sessionRepo.save(session).catch(() => {});
-      throw new BadRequestException(`Failed to create session: ${err.message}`);
+      throw new BadRequestException(userMsg);
     }
 
     return session;

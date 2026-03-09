@@ -4,6 +4,7 @@ import { Repository, In } from 'typeorm';
 import { Run } from './run.entity';
 import { ScenarioRun } from './scenario-run.entity';
 import { Scenario } from '../scenario/scenario.entity';
+import { Device } from '../device/device.entity';
 import { RunQueueService } from './run-queue.service';
 import { ReportService } from './report.service';
 import { CreateRunDto } from './dto/create-run.dto';
@@ -22,6 +23,7 @@ export class RunService {
     @InjectRepository(Run) private runRepo: Repository<Run>,
     @InjectRepository(ScenarioRun) private scenarioRunRepo: Repository<ScenarioRun>,
     @InjectRepository(Scenario) private scenarioRepo: Repository<Scenario>,
+    @InjectRepository(Device) private deviceRepo: Repository<Device>,
     private runQueueService: RunQueueService,
     private reportService: ReportService,
     private storageService: StorageService,
@@ -31,7 +33,7 @@ export class RunService {
     @Optional() @Inject(forwardRef(() => ScheduleService)) private scheduleService?: ScheduleService,
   ) {}
 
-  async createRun(tenantId: string, dto: CreateRunDto) {
+  async createRun(tenantId: string, dto: CreateRunDto, userId?: string) {
     // Load each scenario to use its actual platform (not the run-level fallback)
     const scenarios = await this.scenarioRepo.find({
       where: { id: In(dto.scenarioIds), tenantId },
@@ -44,6 +46,19 @@ export class RunService {
     const resolvedPlatform = uniquePlatforms.size === 1
       ? [...uniquePlatforms][0]
       : dto.platform;
+
+    // Device borrowing enforcement: iOS/Android runs require a borrowed device
+    if (userId && resolvedPlatform && ['ios', 'android'].includes(resolvedPlatform)) {
+      const borrowedDevice = await this.deviceRepo.findOne({
+        where: { tenantId, borrowedBy: userId, platform: resolvedPlatform as any },
+      });
+      if (!borrowedDevice) {
+        const platformLabel = resolvedPlatform === 'ios' ? 'iOS' : 'Android';
+        throw new BadRequestException(
+          `대여된 ${platformLabel} 디바이스가 없습니다. 먼저 Devices 페이지에서 디바이스를 대여해주세요.`,
+        );
+      }
+    }
 
     const run = this.runRepo.create({
       tenantId,

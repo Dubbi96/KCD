@@ -20,10 +20,11 @@ import { ScheduleModule } from '../schedule/schedule.module';
 import { StorageModule } from '../storage/storage.module';
 import { Scenario } from '../scenario/scenario.entity';
 import { StorageSettings } from '../storage/storage-settings.entity';
+import { Device } from '../device/device.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Run, ScenarioRun, Scenario, StorageSettings]),
+    TypeOrmModule.forFeature([Run, ScenarioRun, Scenario, StorageSettings, Device]),
     AccountModule,
     ScenarioModule,
     AuthProfileModule,

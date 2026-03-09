@@ -81,6 +81,6 @@ export class StreamController {
       options: {},
       runnerId: body.runnerId,
       streamId: id,
-    });
+    }, user.sub);
   }
 }
