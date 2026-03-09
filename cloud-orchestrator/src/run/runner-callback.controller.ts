@@ -169,4 +169,22 @@ export class RunnerCallbackController {
     const runner = await this.validateToken(token);
     return this.authProfileService.findOne(runner.tenantId, authProfileId);
   }
+
+  @Post('runs')
+  @ApiOperation({ summary: 'Runner creates a run in its tenant' })
+  async createRunViaRunner(
+    @Headers('x-runner-token') token: string,
+    @Body() body: {
+      scenarioIds: string[];
+      platform: 'web' | 'ios' | 'android';
+      mode?: 'single' | 'batch' | 'chain' | 'stream';
+    },
+  ) {
+    const runner = await this.validateToken(token);
+    return this.runService.createRun(runner.tenantId, {
+      scenarioIds: body.scenarioIds,
+      platform: body.platform,
+      mode: body.mode || 'single',
+    });
+  }
 }
