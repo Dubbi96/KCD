@@ -23,6 +23,8 @@ infra/terraform/.terraform.lock.hcl
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs & Runtime
 *.log
 logs/
+.logs/
+.pids/
