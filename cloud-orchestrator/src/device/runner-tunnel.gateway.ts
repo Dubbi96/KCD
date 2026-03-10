@@ -41,6 +41,7 @@ interface ClientState {
   runnerId: string;
   authenticated: boolean;
   authTimer: NodeJS.Timeout;
+  frameCount: number;
 }
 
 @WebSocketGateway({ path: '/ws/runner-tunnel' })
@@ -74,7 +75,7 @@ export class RunnerTunnelGateway implements OnGatewayConnection, OnGatewayDiscon
       }
     }, 15_000);
 
-    this.clientState.set(client, { runnerId: '', authenticated: false, authTimer });
+    this.clientState.set(client, { runnerId: '', authenticated: false, authTimer, frameCount: 0 });
     this.logger.log('Runner tunnel connection attempt');
   }
 
@@ -163,6 +164,12 @@ export class RunnerTunnelGateway implements OnGatewayConnection, OnGatewayDiscon
   ) {
     const state = this.clientState.get(client);
     if (!state?.authenticated) return;
+    state.frameCount++;
+    if (state.frameCount === 1) {
+      this.logger.log(`First frame received from runner ${state.runnerId} (session: ${data.sessionId}, ${data.data?.length || 0} bytes)`);
+    } else if (state.frameCount === 10) {
+      this.logger.log(`10 frames received from runner ${state.runnerId} — tunnel frame delivery confirmed`);
+    }
     this.events.emit(`frame:${state.runnerId}`, data.sessionId, data.data);
   }
 

@@ -167,12 +167,17 @@ export class DeviceGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Prefer tunnel (cloud mode — KRC behind NAT)
       if (this.runnerTunnel.isConnected(runner.id)) {
-        this.logger.log(`Joining session ${sessionId} via tunnel (runner: ${runner.name})`);
+        this.logger.log(`Joining session ${sessionId} via tunnel (runner: ${runner.name}, runnerSessionId: ${runnerSessionId})`);
 
+        let clientFrameCount = 0;
         const unsubFrame = this.runnerTunnel.subscribeFrames(
           runner.id,
           runnerSessionId,
           (frame: string) => {
+            clientFrameCount++;
+            if (clientFrameCount === 1) {
+              this.logger.log(`First frame received via tunnel for session ${sessionId} (${frame.length} bytes) — forwarding to browser`);
+            }
             this.sendToClient(client, 'frame', frame);
           },
         );
