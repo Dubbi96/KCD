@@ -217,30 +217,45 @@ setup_postgres_brew() {
     brew install postgresql@16 2>&1 | tail -3
   fi
 
+  # Add Homebrew PostgreSQL binaries to PATH (keg-only formula)
+  local PG_PREFIX
+  PG_PREFIX="$(brew --prefix postgresql@16 2>/dev/null)"
+  if [ -d "$PG_PREFIX/bin" ]; then
+    export PATH="$PG_PREFIX/bin:$PATH"
+    log "  PostgreSQL 경로: $PG_PREFIX/bin"
+  fi
+
   # Ensure PostgreSQL is running
   if ! brew services list | grep postgresql@16 | grep -q started; then
     log "  PostgreSQL 서비스 시작..."
     brew services start postgresql@16
-    sleep 3
   fi
 
-  log "  PostgreSQL 실행 확인..."
+  # Wait for PostgreSQL to accept connections
+  log "  PostgreSQL 시작 대기 중..."
+  sleep 5
   local retries=0
-  while ! pg_isready -h localhost -p 5432 -q 2>/dev/null && [ $retries -lt 10 ]; do
+  while ! pg_isready -h localhost -p 5432 2>/dev/null && [ $retries -lt 20 ]; do
     sleep 2
     retries=$((retries + 1))
+    echo -n "."
   done
+  echo ""
 
-  if ! pg_isready -h localhost -p 5432 -q 2>/dev/null; then
+  if ! pg_isready -h localhost -p 5432 2>/dev/null; then
     err "PostgreSQL이 시작되지 않았습니다."
+    err "수동으로 확인: brew services info postgresql@16"
+    err "또는 직접 시작: $PG_PREFIX/bin/pg_ctl -D $PG_PREFIX/var/postgresql@16 start"
     exit 1
   fi
+  log "  PostgreSQL 실행 확인 완료"
 
   # Create user and databases if needed
   local pg_user
   pg_user=$(whoami)
 
   # Create katab role
+  log "  데이터베이스 사용자/DB 생성 중..."
   psql -h localhost -p 5432 -U "$pg_user" -d postgres -tc \
     "SELECT 1 FROM pg_roles WHERE rolname='katab'" 2>/dev/null | grep -q 1 || \
     psql -h localhost -p 5432 -U "$pg_user" -d postgres -c \
