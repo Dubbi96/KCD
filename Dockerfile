@@ -1,19 +1,27 @@
 # ---- builder ----
 FROM node:20-alpine AS builder
-WORKDIR /app/cloud-orchestrator
-COPY cloud-orchestrator/package.json ./
-COPY cloud-orchestrator/package-lock.json* ./
-RUN npm install
-COPY cloud-orchestrator/ ./
+WORKDIR /build
+
+# 1. katab-shared (local package dependency)
+COPY katab-shared/ ./katab-shared/
+WORKDIR /build/katab-shared
+RUN npm install && npm run build
+
+# 2. KCD cloud-orchestrator
+WORKDIR /build/kcd
+COPY KCD/cloud-orchestrator/package.json KCD/cloud-orchestrator/package-lock.json* ./
+RUN sed -i 's|"file:../../katab-shared"|"file:../katab-shared"|' package.json && npm install
+COPY KCD/cloud-orchestrator/ ./
 RUN npm run build
 
 # ---- runner ----
 FROM node:20-alpine
 RUN apk add --no-cache curl
 WORKDIR /app
-COPY --from=builder /app/cloud-orchestrator/dist ./dist
-COPY --from=builder /app/cloud-orchestrator/node_modules ./node_modules
-COPY --from=builder /app/cloud-orchestrator/package.json .
-COPY --from=builder /app/cloud-orchestrator/tsconfig.json* .
+COPY --from=builder /build/kcd/dist ./dist
+COPY --from=builder /build/kcd/node_modules ./node_modules
+COPY --from=builder /build/kcd/package.json .
+COPY --from=builder /build/katab-shared/dist ./node_modules/katab-shared/dist
+COPY --from=builder /build/katab-shared/package.json ./node_modules/katab-shared/
 EXPOSE 4000
-CMD ["sh", "-c", "npx typeorm migration:run -d dist/database/data-source.js && node dist/main.js"]
+CMD ["node", "dist/main.js"]
