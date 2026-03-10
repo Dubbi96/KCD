@@ -287,4 +287,14 @@ export const api = {
     return request<any>(`/control-plane/capacity${qs}`);
   },
   getJobStats: () => request<any>('/control-plane/job-stats'),
+
+  // Device history (Phase G)
+  getDeviceHistory: (id: string, limit = 50) =>
+    request<any>(`/control-plane/devices/${id}/history?limit=${limit}`),
+
+  // Artifact manifest
+  getRunArtifacts: (runId: string) =>
+    request<any[]>(`/storage/artifacts/run/${runId}`),
+  getScenarioRunArtifacts: (scenarioRunId: string) =>
+    request<any[]>(`/storage/artifacts/scenario-run/${scenarioRunId}`),
 };

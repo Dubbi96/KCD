@@ -125,4 +125,10 @@ export class ControlPlaneService {
   async getCapacityForecast(platform: string): Promise<any> {
     return this.request(`/resources/capacity/forecast?platform=${platform}`);
   }
+
+  // === Device History (Phase G — drill-down) ===
+
+  async getDeviceHistory(deviceId: string, limit = 50): Promise<any> {
+    return this.request(`/devices/${deviceId}/history?limit=${limit}`);
+  }
 }

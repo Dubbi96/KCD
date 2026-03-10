@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { StorageSettings } from './storage-settings.entity';
+import { ArtifactManifest } from './artifact-manifest.entity';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -44,6 +45,8 @@ export class StorageService {
   constructor(
     @InjectRepository(StorageSettings)
     private settingsRepo: Repository<StorageSettings>,
+    @InjectRepository(ArtifactManifest)
+    private manifestRepo: Repository<ArtifactManifest>,
     private configService: ConfigService,
   ) {
     this.dashboardUrl = this.configService.get<string>(
@@ -289,5 +292,38 @@ export class StorageService {
       return `${config.reportBaseUrl.replace(/\/+$/, '')}/${pathAfterPrefix}`;
     }
     return `https://${config.bucket}.s3.${config.region}.amazonaws.com/${s3Key}`;
+  }
+
+  // ─── Artifact Manifest ─────────────────────────────
+
+  async recordArtifact(params: {
+    tenantId: string;
+    runId: string;
+    scenarioRunId?: string;
+    stepId?: string;
+    sessionId?: string;
+    artifactType: ArtifactManifest['artifactType'];
+    path: string;
+    url?: string;
+    storageBackend: 'local' | 's3';
+    sizeBytes?: number;
+    contentType?: string;
+  }): Promise<ArtifactManifest> {
+    const manifest = this.manifestRepo.create(params);
+    return this.manifestRepo.save(manifest);
+  }
+
+  async getArtifactsByRun(runId: string): Promise<ArtifactManifest[]> {
+    return this.manifestRepo.find({
+      where: { runId },
+      order: { createdAt: 'ASC' },
+    });
+  }
+
+  async getArtifactsByScenarioRun(scenarioRunId: string): Promise<ArtifactManifest[]> {
+    return this.manifestRepo.find({
+      where: { scenarioRunId },
+      order: { createdAt: 'ASC' },
+    });
   }
 }

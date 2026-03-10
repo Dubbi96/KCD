@@ -1,4 +1,4 @@
-import { Controller, Get, Put, Delete, Body, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Put, Delete, Param, Body, Req, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { StorageService } from './storage.service';
@@ -6,11 +6,11 @@ import { StorageService } from './storage.service';
 @ApiTags('Storage')
 @ApiBearerAuth()
 @UseGuards(AuthGuard('jwt'))
-@Controller('storage/settings')
+@Controller('storage')
 export class StorageController {
   constructor(private storageService: StorageService) {}
 
-  @Get()
+  @Get('settings')
   @ApiOperation({ summary: 'Get tenant storage settings' })
   async getSettings(@Req() req: any) {
     const settings = await this.storageService.getSettings(req.user.tenantId);
@@ -28,7 +28,7 @@ export class StorageController {
     };
   }
 
-  @Put()
+  @Put('settings')
   @ApiOperation({ summary: 'Update tenant storage settings (S3 config)' })
   async updateSettings(
     @Req() req: any,
@@ -54,10 +54,22 @@ export class StorageController {
     };
   }
 
-  @Delete()
+  @Delete('settings')
   @ApiOperation({ summary: 'Delete tenant storage settings' })
   async deleteSettings(@Req() req: any) {
     await this.storageService.deleteSettings(req.user.tenantId);
     return { ok: true };
+  }
+
+  @Get('artifacts/run/:runId')
+  @ApiOperation({ summary: 'List artifacts for a run' })
+  async getRunArtifacts(@Param('runId') runId: string) {
+    return this.storageService.getArtifactsByRun(runId);
+  }
+
+  @Get('artifacts/scenario-run/:scenarioRunId')
+  @ApiOperation({ summary: 'List artifacts for a scenario run' })
+  async getScenarioRunArtifacts(@Param('scenarioRunId') scenarioRunId: string) {
+    return this.storageService.getArtifactsByScenarioRun(scenarioRunId);
   }
 }

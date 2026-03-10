@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Inject, forwardRef, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import * as cronParser from 'cron-parser';
@@ -7,8 +7,13 @@ import { PlannedRun } from './planned-run.entity';
 import { CreateScheduleDto, CronPreviewDto } from './dto/create-schedule.dto';
 import { RunService } from '../run/run.service';
 
+/** Max pending (QUEUED/RUNNING) PlannedRuns across all schedules before throttling */
+const QUEUE_DEPTH_THRESHOLD = 50;
+
 @Injectable()
 export class ScheduleService {
+  private readonly logger = new Logger('ScheduleService');
+
   constructor(
     @InjectRepository(Schedule) private scheduleRepo: Repository<Schedule>,
     @InjectRepository(PlannedRun) private plannedRunRepo: Repository<PlannedRun>,
@@ -212,22 +217,37 @@ export class ScheduleService {
       });
       await this.plannedRunRepo.save(pr);
 
-      // If no delay, process immediately
+      // If no delay, process immediately with atomic claim
       if (!schedule.delayMs) {
         try {
-          await this.plannedRunRepo.update(pr.id, { status: 'QUEUED' });
+          const claimed = await this.atomicClaim(pr.id);
+          if (!claimed) continue;
           const result = await this.runService.createRunFromSchedule(tenantId, schedule, pr.id);
           await this.plannedRunRepo.update(pr.id, {
             status: 'RUNNING',
             runId: result.run.id,
           });
         } catch (e) {
-          console.error(`Failed to process AFTER trigger ${schedule.id}:`, e.message);
+          this.logger.error(`Failed to process AFTER trigger ${schedule.id}: ${e.message}`);
           await this.plannedRunRepo.update(pr.id, { status: 'PLANNED' });
         }
       }
       // If delayed, processDuePlannedRuns will pick it up on the next tick
     }
+  }
+
+  /**
+   * Atomically claim a PlannedRun: PLANNED → QUEUED.
+   * Returns true if this instance won the claim (CAS-style).
+   */
+  private async atomicClaim(plannedRunId: string): Promise<boolean> {
+    const result = await this.plannedRunRepo
+      .createQueryBuilder()
+      .update()
+      .set({ status: 'QUEUED' as any })
+      .where('id = :id AND status = :status', { id: plannedRunId, status: 'PLANNED' })
+      .execute();
+    return (result.affected ?? 0) > 0;
   }
 
   async processDuePlannedRuns() {
@@ -242,6 +262,15 @@ export class ScheduleService {
       .where('status IN (:...statuses)', { statuses: ['QUEUED', 'RUNNING'] })
       .andWhere('planned_at < :threshold', { threshold: staleThreshold })
       .execute();
+
+    // D4: Queue depth throttle — stop enqueuing if too many runs are already active
+    const activeGlobalCount = await this.plannedRunRepo.count({
+      where: { status: In(['QUEUED', 'RUNNING']) },
+    });
+    if (activeGlobalCount >= QUEUE_DEPTH_THRESHOLD) {
+      this.logger.warn(`Queue depth throttle: ${activeGlobalCount}/${QUEUE_DEPTH_THRESHOLD} active — skipping tick`);
+      return;
+    }
 
     // Optimized: filter by plannedAt in DB query with LIMIT
     const dueRuns = await this.plannedRunRepo
@@ -302,7 +331,19 @@ export class ScheduleService {
         }
 
         try {
-          await this.plannedRunRepo.update(pr.id, { status: 'QUEUED' });
+          // D2: Atomic claim — only one instance can move PLANNED → QUEUED
+          const claimed = await this.atomicClaim(pr.id);
+          if (!claimed) {
+            this.logger.debug(`PlannedRun ${pr.id} already claimed by another instance`);
+            continue;
+          }
+
+          // D3: Idempotency — check no Run already exists for this plannedRunId
+          if (pr.runId) {
+            this.logger.warn(`PlannedRun ${pr.id} already has runId ${pr.runId} — skipping`);
+            continue;
+          }
+
           const result = await this.runService.createRunFromSchedule(
             pr.tenantId,
             schedule,
@@ -318,7 +359,7 @@ export class ScheduleService {
             await this.maintainLookahead(schedule);
           }
         } catch (e) {
-          console.error(`Failed to process planned run ${pr.id}:`, e.message);
+          this.logger.error(`Failed to process planned run ${pr.id}: ${e.message}`);
           await this.plannedRunRepo.update(pr.id, { status: 'PLANNED' });
         }
       }

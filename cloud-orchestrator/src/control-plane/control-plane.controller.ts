@@ -88,4 +88,10 @@ export class ControlPlaneController {
   async getJobStats() {
     return this.cpService.getJobStats();
   }
+
+  @Get('devices/:id/history')
+  @ApiOperation({ summary: 'Device event history (health, failure, recovery, quarantine)' })
+  async getDeviceHistory(@Param('id') id: string, @Query('limit') limit?: string) {
+    return this.cpService.getDeviceHistory(id, limit ? parseInt(limit) : 50);
+  }
 }
