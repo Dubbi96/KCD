@@ -262,4 +262,29 @@ export const api = {
     request<any>(`/scenarios/${id}/partial-rerecord`, { method: 'POST', body: JSON.stringify(data) }),
   applyPartialRerecord: (id: string, requestId: string, data: { fromStep: number; toStep: number; events: any[] }) =>
     request<any>(`/scenarios/${id}/partial-rerecord/${requestId}/apply`, { method: 'POST', body: JSON.stringify(data) }),
+
+  // Fleet — Control Plane proxy
+  getPoolOverview: () => request<any>('/control-plane/pool'),
+  getFleetNodes: () => request<any[]>('/control-plane/nodes'),
+  getFleetNodeDetail: (id: string) => request<any>(`/control-plane/nodes/${id}`),
+  drainNode: (id: string) => request<any>(`/control-plane/nodes/${id}/drain`, { method: 'POST' }),
+  getFleetDevices: (platform?: string, status?: string) => {
+    const params = new URLSearchParams();
+    if (platform) params.set('platform', platform);
+    if (status) params.set('status', status);
+    const qs = params.toString();
+    return request<any[]>(`/control-plane/devices${qs ? `?${qs}` : ''}`);
+  },
+  getDeviceHealth: (id: string) => request<any>(`/control-plane/devices/${id}`),
+  quarantineDevice: (id: string, durationMinutes?: number, reason?: string) =>
+    request<any>(`/control-plane/devices/${id}/quarantine`, { method: 'POST', body: JSON.stringify({ durationMinutes, reason }) }),
+  unquarantineDevice: (id: string) =>
+    request<any>(`/control-plane/devices/${id}/quarantine`, { method: 'DELETE' }),
+  getCapacityForecast: (platform: string) =>
+    request<any>(`/control-plane/capacity/forecast?platform=${platform}`),
+  getFleetCapacity: (tenantId?: string) => {
+    const qs = tenantId ? `?tenantId=${tenantId}` : '';
+    return request<any>(`/control-plane/capacity${qs}`);
+  },
+  getJobStats: () => request<any>('/control-plane/job-stats'),
 };

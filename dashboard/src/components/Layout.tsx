@@ -15,6 +15,7 @@ import {
   Key,
   GitBranch,
   Database,
+  Server,
 } from 'lucide-react';
 
 const navItems = [
@@ -25,6 +26,7 @@ const navItems = [
   { path: '/auth-profiles', label: 'Auth Profiles', icon: Key },
   { path: '/test-data', label: 'Test Data', icon: Database },
   { path: '/devices', label: 'Devices', icon: Smartphone },
+  { path: '/fleet', label: 'Fleet', icon: Server },
   { path: '/schedules', label: 'Schedules', icon: Clock },
   { path: '/runs', label: 'Runs', icon: Play },
   { path: '/runners', label: 'Runners', icon: Monitor },

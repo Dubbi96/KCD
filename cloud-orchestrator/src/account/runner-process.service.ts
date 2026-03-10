@@ -29,15 +29,20 @@ export class RunnerProcessService implements OnModuleInit, OnModuleDestroy {
   private processes = new Map<string, ManagedProcess>();
   private readonly localRunnerDir = path.resolve(__dirname, '../../../../KRC');
   private readonly basePort = 5001;
+  private readonly isExternal: boolean;
 
   constructor(
     @InjectRepository(Runner) private runnerRepo: Repository<Runner>,
-  ) {}
+  ) {
+    this.isExternal = (process.env.RUNNER_MANAGEMENT_MODE || 'external') !== 'embedded';
+  }
 
   async onModuleInit() {
-    // Mark all existing runners as offline on startup.
-    // Runners are only started explicitly via API (POST /account/runners/:id/start)
-    // or auto-spawned when first created via POST /account/runners.
+    if (this.isExternal) {
+      this.logger.log('Runner management mode: external — process spawning disabled. Runners are managed independently on their host machines.');
+      return;
+    }
+
     const runners = await this.runnerRepo.find();
     if (runners.length > 0) {
       this.logger.log(`Found ${runners.length} existing runner(s). Marking offline (start manually via dashboard).`);
@@ -50,6 +55,7 @@ export class RunnerProcessService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleDestroy() {
+    if (this.isExternal) return;
     this.logger.log('Shutting down all runner processes...');
     for (const [runnerId, managed] of this.processes) {
       this.killProcess(runnerId);
@@ -58,8 +64,13 @@ export class RunnerProcessService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Spawn a local-runner child process for the given runner.
+   * No-op when RUNNER_MANAGEMENT_MODE=external.
    */
   async spawnRunner(runner: Runner): Promise<number> {
+    if (this.isExternal) {
+      this.logger.warn(`spawnRunner called in external mode — skipping. Runner "${runner.name}" must be started on its host machine.`);
+      return 0;
+    }
     if (this.processes.has(runner.id)) {
       this.logger.warn(`Runner ${runner.name} already has a running process. Skipping.`);
       const existing = this.processes.get(runner.id)!;

@@ -107,4 +107,22 @@ export class ControlPlaneService {
   async getJobStats(): Promise<Record<string, Record<string, number>> | null> {
     return this.request('/jobs/stats');
   }
+
+  // === Device Health / Quarantine (Phase 5+) ===
+
+  async getDeviceHealth(deviceId: string): Promise<any> {
+    return this.request(`/devices/${deviceId}`);
+  }
+
+  async quarantineDevice(deviceId: string, durationMinutes?: number, reason?: string): Promise<any> {
+    return this.request(`/devices/${deviceId}/quarantine`, 'POST', { durationMinutes, reason });
+  }
+
+  async unquarantineDevice(deviceId: string): Promise<any> {
+    return this.request(`/devices/${deviceId}/quarantine`, 'DELETE');
+  }
+
+  async getCapacityForecast(platform: string): Promise<any> {
+    return this.request(`/resources/capacity/forecast?platform=${platform}`);
+  }
 }

@@ -12,6 +12,7 @@ import { RunnerProcessService } from './runner-process.service';
 @Injectable()
 export class AccountService {
   private logger = new Logger('AccountService');
+  private readonly runnerMode: 'external' | 'embedded';
 
   constructor(
     @InjectRepository(Tenant) private tenantRepo: Repository<Tenant>,
@@ -19,7 +20,14 @@ export class AccountService {
     @InjectRepository(Runner) private runnerRepo: Repository<Runner>,
     @InjectRepository(DeviceSession) private sessionRepo: Repository<DeviceSession>,
     private runnerProcess: RunnerProcessService,
-  ) {}
+  ) {
+    this.runnerMode = (process.env.RUNNER_MANAGEMENT_MODE as any) || 'external';
+    this.logger.log(`Runner management mode: ${this.runnerMode}`);
+  }
+
+  private get isEmbedded(): boolean {
+    return this.runnerMode === 'embedded';
+  }
 
   async getTenant(tenantId: string) {
     const tenant = await this.tenantRepo.findOne({ where: { id: tenantId } });
@@ -55,8 +63,7 @@ export class AccountService {
     });
     await this.runnerRepo.save(runner);
 
-    // Auto-spawn only in local development (cloud ECS has no local KRC)
-    if (process.env.NODE_ENV === 'development') {
+    if (this.isEmbedded) {
       try {
         const port = await this.runnerProcess.spawnRunner(runner);
         this.logger.log(`Runner "${runner.name}" spawned on port ${port}`);
@@ -64,10 +71,31 @@ export class AccountService {
         this.logger.error(`Failed to auto-spawn runner: ${e.message}`);
       }
     } else {
-      this.logger.log(`Runner "${runner.name}" created (cloud mode — configure KRC with RUNNER_ID=${runner.id} RUNNER_API_TOKEN=${runner.apiToken})`);
+      this.logger.log(`Runner "${runner.name}" registered (external mode)`);
     }
 
-    return runner;
+    const serverHost = process.env.SERVER_HOST || 'localhost';
+    const serverPort = process.env.PORT || '4000';
+    const kcpUrl = process.env.KCP_API_URL || `http://${serverHost}:4100/api`;
+    const cloudApiUrl = `http://${serverHost}:${serverPort}/api/v1`;
+
+    return {
+      ...runner,
+      setupGuide: this.isEmbedded ? undefined : {
+        runnerId: runner.id,
+        apiToken: runner.apiToken,
+        envVars: {
+          RUNNER_ID: runner.id,
+          RUNNER_API_TOKEN: runner.apiToken,
+          CLOUD_API_URL: cloudApiUrl,
+          CONTROL_PLANE_URL: kcpUrl,
+          RUNNER_PLATFORMS: runner.platform || 'web',
+          LOCAL_API_PORT: '5001',
+          LOCAL_API_BIND: '0.0.0.0',
+        },
+        command: `cd KRC && RUNNER_ID=${runner.id} RUNNER_API_TOKEN=${runner.apiToken} CLOUD_API_URL=${cloudApiUrl} CONTROL_PLANE_URL=${kcpUrl} RUNNER_PLATFORMS=${runner.platform || 'web'} npx ts-node src/main.ts`,
+      },
+    };
   }
 
   async listRunners(tenantId: string) {
@@ -82,12 +110,18 @@ export class AccountService {
         ? now - new Date(r.lastHeartbeatAt).getTime()
         : Infinity;
       const isAlive = heartbeatAge < AccountService.HEARTBEAT_TIMEOUT_MS;
-      const processUp = this.runnerProcess.isRunning(r.id);
+
+      const processUp = this.isEmbedded
+        ? this.runnerProcess.isRunning(r.id)
+        : false;
 
       return {
         ...r,
+        runnerMode: this.runnerMode,
         processRunning: processUp || (isAlive && r.status === 'online'),
-        localPort: this.runnerProcess.getPort(r.id) || (r.metadata as any)?.localApiPort,
+        localPort: this.isEmbedded
+          ? (this.runnerProcess.getPort(r.id) || (r.metadata as any)?.localApiPort)
+          : (r.metadata as any)?.localApiPort,
         localHost: (r.metadata as any)?.localApiHost,
       };
     });
@@ -131,11 +165,14 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    if (process.env.NODE_ENV === 'development') {
+    if (this.isEmbedded) {
       const port = await this.runnerProcess.restartRunner(runner);
       return { runnerId: runner.id, name: runner.name, port, status: 'restarting' };
     }
-    return { runnerId: runner.id, name: runner.name, status: 'pending', message: 'Cloud mode — restart KRC manually on the host machine' };
+    return {
+      runnerId: runner.id, name: runner.name, status: 'external',
+      message: 'Runner is externally managed. Restart the KRC agent on the host machine.',
+    };
   }
 
   async stopRunner(tenantId: string, runnerId: string) {
@@ -144,7 +181,7 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    if (process.env.NODE_ENV === 'development') {
+    if (this.isEmbedded) {
       this.runnerProcess.killProcess(runnerId);
     }
     await this.runnerRepo.update(runnerId, { status: 'offline' });
@@ -157,11 +194,33 @@ export class AccountService {
     });
     if (!runner) throw new NotFoundException('Runner not found');
 
-    if (process.env.NODE_ENV === 'development') {
+    if (this.isEmbedded) {
       const port = await this.runnerProcess.spawnRunner(runner);
       return { runnerId: runner.id, name: runner.name, port, status: 'starting' };
     }
-    return { runnerId: runner.id, name: runner.name, status: 'pending', message: 'Cloud mode — start KRC manually on the host machine' };
+
+    const serverHost = process.env.SERVER_HOST || 'localhost';
+    const serverPort = process.env.PORT || '4000';
+    const kcpUrl = process.env.KCP_API_URL || `http://${serverHost}:4100/api`;
+    const cloudApiUrl = `http://${serverHost}:${serverPort}/api/v1`;
+
+    return {
+      runnerId: runner.id, name: runner.name, status: 'external',
+      message: 'Runner is externally managed. Start KRC on the host machine with the following env vars.',
+      setupGuide: {
+        runnerId: runner.id,
+        apiToken: runner.apiToken,
+        envVars: {
+          RUNNER_ID: runner.id,
+          RUNNER_API_TOKEN: runner.apiToken,
+          CLOUD_API_URL: cloudApiUrl,
+          CONTROL_PLANE_URL: kcpUrl,
+          RUNNER_PLATFORMS: runner.platform || 'web',
+          LOCAL_API_PORT: '5001',
+          LOCAL_API_BIND: '0.0.0.0',
+        },
+      },
+    };
   }
 
   getRunnerProcessStatus() {

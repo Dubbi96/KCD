@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { StorageSettings } from './storage-settings.entity';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface ReportUploadResult {
   scenarioId: string;
@@ -34,6 +36,8 @@ const MIME_TYPES: Record<string, string> = {
 export class StorageService {
   private readonly logger = new Logger('StorageService');
   private readonly dashboardUrl: string;
+  private readonly storageMode: 'local' | 's3';
+  private readonly localStoragePath: string;
   /** 테넌트별 S3 클라이언트 캐시 */
   private s3Clients = new Map<string, any>();
 
@@ -46,6 +50,15 @@ export class StorageService {
       'DASHBOARD_URL',
       'http://localhost:4000',
     );
+    this.storageMode = (this.configService.get<string>('STORAGE_MODE', 'local') as any);
+    this.localStoragePath = this.configService.get<string>(
+      'REPORT_STORAGE_PATH',
+      path.resolve(process.cwd(), 'data/reports'),
+    );
+
+    if (this.storageMode === 'local') {
+      this.logger.log(`Storage mode: local (path: ${this.localStoragePath})`);
+    }
   }
 
   // ─── Settings CRUD ────────────────────────────────
@@ -86,8 +99,16 @@ export class StorageService {
     runId: string,
     htmlContent: string,
   ): Promise<string | null> {
+    // Try local storage first
+    if (this.storageMode === 'local') {
+      return this.writeLocalReport(tenantId, runId, 'report.html', htmlContent);
+    }
+
     const config = await this.resolveS3Config(tenantId);
-    if (!config) return null;
+    if (!config) {
+      // Fallback to local storage when S3 not configured
+      return this.writeLocalReport(tenantId, runId, 'report.html', htmlContent);
+    }
 
     const s3Key = `${config.prefix}/${tenantId}/runs/${runId}/report.html`;
     try {
@@ -109,8 +130,14 @@ export class StorageService {
     runId: string,
     jsonContent: string,
   ): Promise<string | null> {
+    if (this.storageMode === 'local') {
+      return this.writeLocalReport(tenantId, runId, 'report.json', jsonContent);
+    }
+
     const config = await this.resolveS3Config(tenantId);
-    if (!config) return null;
+    if (!config) {
+      return this.writeLocalReport(tenantId, runId, 'report.json', jsonContent);
+    }
 
     const s3Key = `${config.prefix}/${tenantId}/runs/${runId}/report.json`;
     try {
@@ -135,6 +162,39 @@ export class StorageService {
    */
   buildReportUrl(tenantId: string, runId: string): string {
     return `/api/v1/runs/${runId}/report/html`;
+  }
+
+  // ─── Local Storage ──────────────────────────────────
+
+  private writeLocalReport(
+    tenantId: string,
+    runId: string,
+    filename: string,
+    content: string,
+  ): string | null {
+    const dir = path.join(this.localStoragePath, tenantId, 'runs', runId);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, filename), content, 'utf-8');
+      const url = `/api/v1/reports/${tenantId}/runs/${runId}/${filename}`;
+      this.logger.log(`Report saved locally: ${dir}/${filename}`);
+      return url;
+    } catch (err: any) {
+      this.logger.error(`Failed to save local report: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Read a locally stored report file.
+   */
+  readLocalReport(tenantId: string, runId: string, filename: string): string | null {
+    const filePath = path.join(this.localStoragePath, tenantId, 'runs', runId, filename);
+    try {
+      return fs.readFileSync(filePath, 'utf-8');
+    } catch {
+      return null;
+    }
   }
 
   // ─── Private ──────────────────────────────────────

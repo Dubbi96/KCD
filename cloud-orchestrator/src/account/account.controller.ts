@@ -86,4 +86,12 @@ export class AccountController {
   getProcessStatus() {
     return this.accountService.getRunnerProcessStatus();
   }
+
+  @Get('config')
+  @ApiOperation({ summary: 'Get server configuration (runner mode, etc.)' })
+  getConfig() {
+    return {
+      runnerManagementMode: process.env.RUNNER_MANAGEMENT_MODE || 'external',
+    };
+  }
 }

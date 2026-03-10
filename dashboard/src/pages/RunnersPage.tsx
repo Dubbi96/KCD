@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
-import { Plus, Trash2, Monitor, Wifi, WifiOff, Play, Square, RotateCw, Globe, Smartphone, TabletSmartphone } from 'lucide-react';
+import { Plus, Trash2, Monitor, Wifi, WifiOff, Play, Square, RotateCw, Globe, Smartphone, TabletSmartphone, BookOpen, Copy, Check } from 'lucide-react';
 
 const PLATFORM_CONFIG = {
   web: { label: 'Web', icon: Globe, color: 'blue', desc: 'Playwright-based browser recording & testing' },
@@ -12,9 +12,14 @@ export default function RunnersPage() {
   const [runners, setRunners] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [showSetup, setShowSetup] = useState<any>(null);
   const [name, setName] = useState('');
+  const [platform, setPlatform] = useState<'web' | 'ios' | 'android'>('web');
   const [saving, setSaving] = useState(false);
   const [actionId, setActionId] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const isExternalMode = runners.length > 0 && runners[0]?.runnerMode === 'external';
 
   const load = () => {
     setLoading(true);
@@ -27,9 +32,13 @@ export default function RunnersPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      await api.createRunner({ name, platform: 'web' });
+      const result = await api.createRunner({ name, platform });
       setName('');
+      setPlatform('web');
       setShowCreate(false);
+      if (result.setupGuide) {
+        setShowSetup(result.setupGuide);
+      }
       load();
     } catch (err: any) {
       alert(err.message);
@@ -51,7 +60,13 @@ export default function RunnersPage() {
 
   const handleStart = async (id: string) => {
     setActionId(id);
-    try { await api.startRunner(id); load(); } catch (err: any) { alert(err.message); } finally { setActionId(null); }
+    try {
+      const result = await api.startRunner(id);
+      if (result.setupGuide) {
+        setShowSetup(result.setupGuide);
+      }
+      load();
+    } catch (err: any) { alert(err.message); } finally { setActionId(null); }
   };
 
   const handleStop = async (id: string) => {
@@ -62,6 +77,23 @@ export default function RunnersPage() {
   const handleRestart = async (id: string) => {
     setActionId(id);
     try { await api.restartRunner(id); setTimeout(load, 2000); } catch (err: any) { alert(err.message); } finally { setActionId(null); }
+  };
+
+  const handleShowSetup = async (runner: any) => {
+    try {
+      const result = await api.startRunner(runner.id);
+      if (result.setupGuide) {
+        setShowSetup(result.setupGuide);
+      }
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(key);
+    setTimeout(() => setCopied(null), 2000);
   };
 
   const isOnline = (r: any) => {
@@ -127,13 +159,21 @@ export default function RunnersPage() {
             </div>
           </div>
           <div className="flex items-center gap-1">
-            {processUp || online ? (
+            {isExternalMode ? (
               <>
-                <button onClick={() => handleRestart(r.id)} disabled={busy} className="p-1.5 text-muted hover:text-yellow-400 transition-colors disabled:opacity-30" title="Restart"><RotateCw size={14} /></button>
-                <button onClick={() => handleStop(r.id)} disabled={busy} className="p-1.5 text-muted hover:text-orange-400 transition-colors disabled:opacity-30" title="Stop"><Square size={14} /></button>
+                <button onClick={() => handleShowSetup(r)} className="p-1.5 text-muted hover:text-blue-400 transition-colors" title="Setup Guide">
+                  <BookOpen size={14} />
+                </button>
               </>
             ) : (
-              <button onClick={() => handleStart(r.id)} disabled={busy} className="p-1.5 text-muted hover:text-green-400 transition-colors disabled:opacity-30" title="Start"><Play size={14} /></button>
+              processUp || online ? (
+                <>
+                  <button onClick={() => handleRestart(r.id)} disabled={busy} className="p-1.5 text-muted hover:text-yellow-400 transition-colors disabled:opacity-30" title="Restart"><RotateCw size={14} /></button>
+                  <button onClick={() => handleStop(r.id)} disabled={busy} className="p-1.5 text-muted hover:text-orange-400 transition-colors disabled:opacity-30" title="Stop"><Square size={14} /></button>
+                </>
+              ) : (
+                <button onClick={() => handleStart(r.id)} disabled={busy} className="p-1.5 text-muted hover:text-green-400 transition-colors disabled:opacity-30" title="Start"><Play size={14} /></button>
+              )
             )}
             <button onClick={() => handleDelete(r.id)} className="p-1.5 text-muted hover:text-red-400 transition-colors" title="Delete"><Trash2 size={14} /></button>
           </div>
@@ -147,7 +187,11 @@ export default function RunnersPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-xl font-bold text-white">Runners</h2>
-          <p className="text-xs text-muted mt-0.5">Node Agents (KRC). Each runner is an independent node registered via Control Plane.</p>
+          <p className="text-xs text-muted mt-0.5">
+            {isExternalMode
+              ? 'Node Agents (KRC). Each runner is deployed independently on its host machine.'
+              : 'Node Agents (KRC). Each runner is an independent node registered via Control Plane.'}
+          </p>
         </div>
         <button onClick={() => setShowCreate(true)} className="flex items-center gap-1.5 bg-accent text-white px-3 py-1.5 rounded-lg text-sm hover:bg-accent-hover transition-colors">
           <Plus size={14} /> New Runner
@@ -177,11 +221,23 @@ export default function RunnersPage() {
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowCreate(false)}>
           <div className="bg-card rounded-2xl border border-border p-6 w-full max-w-sm animate-modal-in" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-base font-semibold text-white mb-1">New Runner</h3>
-            <p className="text-xs text-muted mb-4">Register a KRC node agent. Each node handles all platforms (Web, iOS, Android). Deploy KRC on the target machine with the generated token.</p>
+            <p className="text-xs text-muted mb-4">
+              {isExternalMode
+                ? 'Register a runner token. After creation, deploy KRC on the target machine with the generated credentials.'
+                : 'Register a KRC node agent. Deploy KRC on the target machine with the generated token.'}
+            </p>
             <form onSubmit={handleCreate} className="space-y-3">
               <div>
                 <label className="block text-xs text-muted mb-1">Runner Name</label>
-                <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="e.g. runner-1" required />
+                <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} placeholder="e.g. office-mac-1" required />
+              </div>
+              <div>
+                <label className="block text-xs text-muted mb-1">Platform</label>
+                <select value={platform} onChange={(e) => setPlatform(e.target.value as any)} className={inputClass}>
+                  <option value="web">Web (Playwright)</option>
+                  <option value="ios">iOS (Appium XCUITest)</option>
+                  <option value="android">Android (Appium UiAutomator2)</option>
+                </select>
               </div>
               <div className="flex gap-2 pt-2">
                 <button type="button" onClick={() => setShowCreate(false)} className="flex-1 px-3 py-2 border border-border rounded-lg text-sm text-muted hover:text-white transition-colors">Cancel</button>
@@ -190,6 +246,70 @@ export default function RunnersPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Setup Guide Modal */}
+      {showSetup && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowSetup(null)}>
+          <div className="bg-card rounded-2xl border border-border p-6 w-full max-w-lg animate-modal-in" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-white mb-1">KRC Setup Guide</h3>
+            <p className="text-xs text-muted mb-4">Deploy KRC on the target machine with the following configuration.</p>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs text-muted mb-1">1. Environment Variables (.env)</label>
+                <div className="relative">
+                  <pre className="bg-card2 border border-border rounded-lg p-3 text-xs text-green-400 font-mono overflow-x-auto whitespace-pre">
+{Object.entries(showSetup.envVars || {}).map(([k, v]: [string, any]) => `${k}=${v}`).join('\n')}
+                  </pre>
+                  <button
+                    onClick={() => copyToClipboard(
+                      Object.entries(showSetup.envVars || {}).map(([k, v]: [string, any]) => `${k}=${v}`).join('\n'),
+                      'env'
+                    )}
+                    className="absolute top-2 right-2 p-1 text-muted hover:text-white transition-colors"
+                    title="Copy"
+                  >
+                    {copied === 'env' ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-muted mb-1">2. Quick Start Command</label>
+                <div className="relative">
+                  <pre className="bg-card2 border border-border rounded-lg p-3 text-xs text-blue-400 font-mono overflow-x-auto whitespace-pre">
+{showSetup.command || `cd KRC && npx ts-node src/main.ts`}
+                  </pre>
+                  <button
+                    onClick={() => copyToClipboard(showSetup.command || '', 'cmd')}
+                    className="absolute top-2 right-2 p-1 text-muted hover:text-white transition-colors"
+                    title="Copy"
+                  >
+                    {copied === 'cmd' ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs text-muted mb-1">3. As a macOS Service (launchd)</label>
+                <p className="text-xs text-muted">
+                  Copy the env vars to <code className="text-white">.env</code> in the KRC directory, then:
+                </p>
+                <pre className="bg-card2 border border-border rounded-lg p-3 text-xs text-yellow-400 font-mono mt-1 overflow-x-auto whitespace-pre">
+{`sudo cp KRC/launchd/com.katab.krc.plist /Library/LaunchDaemons/
+sudo launchctl load /Library/LaunchDaemons/com.katab.krc.plist`}
+                </pre>
+              </div>
+            </div>
+
+            <div className="flex gap-2 pt-4">
+              <button onClick={() => setShowSetup(null)} className="flex-1 px-3 py-2 bg-accent text-white rounded-lg text-sm hover:bg-accent-hover transition-colors">
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

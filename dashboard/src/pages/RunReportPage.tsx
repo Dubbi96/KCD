@@ -6,6 +6,7 @@ import {
   ChevronDown, ChevronRight, FileText, Pause, Play, Image,
   ShieldCheck, Variable, Wrench, Eye, Download,
 } from 'lucide-react';
+import DiagnosisSummary from '../components/DiagnosisSummary';
 
 export default function RunReportPage() {
   const { id } = useParams();
@@ -274,6 +275,24 @@ export default function RunReportPage() {
           </div>
         )}
       </div>
+
+      {/* Failure Diagnosis */}
+      {failed > 0 && (
+        <div className="mb-6">
+          <DiagnosisSummary
+            scenarios={scenarioRuns.filter((sr: any) => ['failed', 'infra_failed'].includes(sr.status)).map((sr: any) => ({
+              name: scenarioName(sr.scenarioId),
+              status: sr.status,
+              error: sr.error,
+              failureCode: sr.resultJson?.failureCode,
+              failureCategory: sr.resultJson?.failureCategory,
+              infraFailure: sr.resultJson?.infraFailure,
+              recoveryAction: sr.resultJson?.recoveryAction,
+              passed: false,
+            }))}
+          />
+        </div>
+      )}
 
       {/* Scenario Runs */}
       <h3 className="text-sm font-medium text-muted mb-3">Scenario Runs ({scenarioRuns.length})</h3>

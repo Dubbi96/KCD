@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api/client';
-import { Activity, FileText, Clock, Monitor } from 'lucide-react';
+import { Activity, FileText, Clock, Monitor, AlertTriangle, Shield, Server } from 'lucide-react';
 
 export default function DashboardPage() {
   const [stats, setStats] = useState({ scenarios: 0, schedules: 0, runners: 0, recentRuns: [] as any[] });
   const [queueStats, setQueueStats] = useState<any[]>([]);
+  const [pool, setPool] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -14,7 +15,8 @@ export default function DashboardPage() {
       api.getRunners().catch(() => []),
       api.getRuns(5, 0).catch(() => ({ runs: [], total: 0 })),
       api.getQueueStats().catch(() => []),
-    ]).then(([scenarios, schedules, runners, runs, qs]) => {
+      api.getPoolOverview().catch(() => null),
+    ]).then(([scenarios, schedules, runners, runs, qs, poolData]) => {
       setStats({
         scenarios: scenarios.length,
         schedules: schedules.length,
@@ -22,6 +24,7 @@ export default function DashboardPage() {
         recentRuns: runs.runs || [],
       });
       setQueueStats(qs);
+      setPool(poolData);
       setLoading(false);
     });
   }, []);
@@ -90,6 +93,51 @@ export default function DashboardPage() {
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Fleet Overview */}
+      {pool && !pool.error && (
+        <div className="bg-card rounded-xl border border-border p-5 mb-8">
+          <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+            <Server size={14} className="text-blue-400" /> Fleet Status
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {pool.cluster && (
+              <>
+                <div className="bg-card2 border border-border rounded-lg p-3">
+                  <div className="text-xs text-muted mb-1">Nodes</div>
+                  <div className="text-sm font-bold text-white">{pool.cluster.onlineNodes}/{pool.cluster.totalNodes} online</div>
+                </div>
+                <div className="bg-card2 border border-border rounded-lg p-3">
+                  <div className="text-xs text-muted mb-1">Avg CPU</div>
+                  <div className={`text-sm font-bold ${pool.cluster.avgCpuUsagePercent > 80 ? 'text-red-400' : 'text-white'}`}>
+                    {pool.cluster.avgCpuUsagePercent}%
+                  </div>
+                </div>
+              </>
+            )}
+            {pool.metrics && (
+              <>
+                <div className="bg-card2 border border-border rounded-lg p-3">
+                  <div className="text-xs text-muted mb-1 flex items-center gap-1">
+                    <AlertTriangle size={10} /> Fail Rate
+                  </div>
+                  <div className={`text-sm font-bold ${pool.metrics.recentFailRate > 20 ? 'text-red-400' : pool.metrics.recentFailRate > 5 ? 'text-yellow-400' : 'text-green-400'}`}>
+                    {pool.metrics.recentFailRate}%
+                  </div>
+                </div>
+                <div className="bg-card2 border border-border rounded-lg p-3">
+                  <div className="text-xs text-muted mb-1 flex items-center gap-1">
+                    <Shield size={10} /> Infra Fail
+                  </div>
+                  <div className={`text-sm font-bold ${pool.metrics.recentInfraFailRate > 10 ? 'text-red-400' : 'text-green-400'}`}>
+                    {pool.metrics.recentInfraFailRate}%
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

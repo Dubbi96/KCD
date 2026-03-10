@@ -150,6 +150,17 @@ export default function DevicesPage() {
     return 'Offline';
   };
 
+  const healthBadge = (health?: string) => {
+    if (!health || health === 'unknown') return null;
+    const map: Record<string, string> = {
+      healthy: 'bg-green-500/15 text-green-400',
+      degraded: 'bg-yellow-500/15 text-yellow-400',
+      unhealthy: 'bg-red-500/15 text-red-400',
+      quarantined: 'bg-orange-500/15 text-orange-400',
+    };
+    return map[health] || null;
+  };
+
   const platformIcon = (p: string) => {
     if (p === 'ios') return <Smartphone size={16} className="text-green-400" />;
     if (p === 'android') return <TabletSmartphone size={16} className="text-yellow-400" />;
@@ -192,11 +203,12 @@ export default function DevicesPage() {
       </div>
 
       {/* Pool Summary */}
-      <div className="grid grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-5 gap-3 mb-6">
         {[
           { label: 'Devices', count: physicalDevices.length, color: 'text-white' },
           { label: 'Available', count: physicalDevices.filter(d => d.status === 'available').length, color: 'text-green-400' },
           { label: 'Borrowed', count: borrowedDevices.length, color: 'text-yellow-400' },
+          { label: 'Quarantined', count: physicalDevices.filter(d => d.healthStatus === 'quarantined').length, color: 'text-orange-400' },
           { label: 'Offline', count: physicalDevices.filter(d => d.status === 'offline').length, color: 'text-gray-400' },
         ].map((s) => (
           <div key={s.label} className="bg-card rounded-xl border border-border p-3 text-center">
@@ -525,9 +537,22 @@ function DeviceCard({
           <div className="text-sm font-medium text-white truncate">{device.name || device.model}</div>
           <div className="text-xs text-muted">{osLabel}</div>
         </div>
-        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${statusBadge(device.status)}`}>
-          {statusLabel(device.status)}
-        </span>
+        <div className="flex items-center gap-1">
+          {device.healthStatus && device.healthStatus !== 'unknown' && (
+            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+              device.healthStatus === 'healthy' ? 'bg-green-500/15 text-green-400' :
+              device.healthStatus === 'degraded' ? 'bg-yellow-500/15 text-yellow-400' :
+              device.healthStatus === 'unhealthy' ? 'bg-red-500/15 text-red-400' :
+              device.healthStatus === 'quarantined' ? 'bg-orange-500/15 text-orange-400' :
+              'bg-gray-500/15 text-gray-400'
+            }`}>
+              {device.healthStatus}
+            </span>
+          )}
+          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${statusBadge(device.status)}`}>
+            {statusLabel(device.status)}
+          </span>
+        </div>
       </div>
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted font-mono">{(device.deviceUdid || device.id)?.slice(0, 12)}...</span>
