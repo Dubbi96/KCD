@@ -6,32 +6,46 @@ import {
   FileText,
   Clock,
   Play,
-  Monitor,
-  Webhook,
   LogOut,
-  ListTodo,
   Smartphone,
   Layers,
-  Key,
   GitBranch,
-  Database,
   Server,
+  Video,
+  ScrollText,
 } from 'lucide-react';
 
-const navItems = [
-  { path: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { path: '/scenarios', label: 'Scenarios', icon: FileText },
-  { path: '/groups', label: 'Groups', icon: Layers },
-  { path: '/streams', label: 'Streams', icon: GitBranch },
-  { path: '/auth-profiles', label: 'Auth Profiles', icon: Key },
-  { path: '/test-data', label: 'Test Data', icon: Database },
-  { path: '/devices', label: 'Devices', icon: Smartphone },
-  { path: '/fleet', label: 'Fleet', icon: Server },
-  { path: '/schedules', label: 'Schedules', icon: Clock },
-  { path: '/runs', label: 'Runs', icon: Play },
-  { path: '/runners', label: 'Runners', icon: Monitor },
-  { path: '/queue', label: 'Queue', icon: ListTodo },
-  { path: '/webhooks', label: 'Webhooks', icon: Webhook },
+interface NavItem {
+  path: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+}
+
+interface NavSection {
+  title: string;
+  items: NavItem[];
+}
+
+const navSections: NavSection[] = [
+  {
+    title: '운영',
+    items: [
+      { path: '/', label: 'Overview', icon: LayoutDashboard },
+      { path: '/fleet', label: 'Fleet', icon: Server },
+      { path: '/devices', label: 'Devices', icon: Smartphone },
+      { path: '/runs', label: 'Runs', icon: Play },
+    ],
+  },
+  {
+    title: '설계',
+    items: [
+      { path: '/recorder', label: '시나리오 녹화', icon: Video },
+      { path: '/scenarios', label: '시나리오', icon: FileText },
+      { path: '/groups', label: '그룹', icon: Layers },
+      { path: '/streams', label: '실행 흐름', icon: GitBranch },
+      { path: '/schedules', label: '스케쥴', icon: Clock },
+    ],
+  },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -47,24 +61,35 @@ export default function Layout({ children }: { children: ReactNode }) {
           <p className="text-muted text-xs mt-0.5">{tenant?.name}</p>
         </div>
 
-        <nav className="flex-1 p-3 space-y-0.5 overflow-auto">
-          {navItems.map(({ path, label, icon: Icon }) => {
-            const active = path === '/' ? pathname === '/' : pathname.startsWith(path);
-            return (
-              <Link
-                key={path}
-                to={path}
-                className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors ${
-                  active
-                    ? 'bg-accent text-white'
-                    : 'text-muted hover:bg-card2 hover:text-white'
-                }`}
-              >
-                <Icon size={16} />
-                {label}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 p-3 overflow-auto">
+          {navSections.map((section, si) => (
+            <div key={section.title} className={si > 0 ? 'mt-5' : ''}>
+              <div className="px-3 mb-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted/60">
+                  {section.title}
+                </span>
+              </div>
+              <div className="space-y-0.5">
+                {section.items.map(({ path, label, icon: Icon }) => {
+                  const active = path === '/' ? pathname === '/' : pathname.startsWith(path);
+                  return (
+                    <Link
+                      key={path}
+                      to={path}
+                      className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-[13px] transition-colors ${
+                        active
+                          ? 'bg-accent text-white'
+                          : 'text-muted hover:bg-card2 hover:text-white'
+                      }`}
+                    >
+                      <Icon size={16} />
+                      {label}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
 
         <div className="p-4 border-t border-border">

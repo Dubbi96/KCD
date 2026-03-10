@@ -19,6 +19,7 @@ import DevicesPage from './pages/DevicesPage';
 import MirrorPage from './pages/MirrorPage';
 import TestDataPage from './pages/TestDataPage';
 import FleetPage from './pages/FleetPage';
+import RecorderPage from './pages/RecorderPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
@@ -42,6 +43,7 @@ export default function App() {
                 <Route path="/groups" element={<GroupsPage />} />
                 <Route path="/auth-profiles" element={<AuthProfilesPage />} />
                 <Route path="/streams" element={<StreamsPage />} />
+                <Route path="/recorder" element={<RecorderPage />} />
                 <Route path="/devices" element={<DevicesPage />} />
                 <Route path="/devices/mirror/:sessionId" element={<MirrorPage />} />
                 <Route path="/fleet" element={<FleetPage />} />

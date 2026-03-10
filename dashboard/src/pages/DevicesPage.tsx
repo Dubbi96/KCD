@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import {
   Smartphone, Monitor, Wifi, WifiOff, Play, Square, Video, RefreshCw,
-  Globe, ChevronDown, TabletSmartphone, ArrowLeftRight, Lock, Unlock, MonitorPlay,
+  TabletSmartphone, ArrowLeftRight, Lock, Unlock, MonitorPlay,
 } from 'lucide-react';
 
 export default function DevicesPage() {
@@ -12,12 +12,6 @@ export default function DevicesPage() {
   const [sessions, setSessions] = useState<any[]>([]);
   const [initialLoading, setInitialLoading] = useState(true);
   const hasLoadedOnce = useRef(false);
-
-  // Web session form state
-  const [webUrl, setWebUrl] = useState('https://');
-  const [webFps, setWebFps] = useState(2);
-  const [webDeviceType, setWebDeviceType] = useState('desktop');
-  const [webBorrowing, setWebBorrowing] = useState(false);
 
   // Session creation form (for borrowed devices)
   const [sessionDeviceId, setSessionDeviceId] = useState<string | null>(null);
@@ -109,20 +103,6 @@ export default function DevicesPage() {
     }
   };
 
-  // Web session (no device needed)
-  const handleWebSession = async () => {
-    if (!webUrl || webUrl === 'https://') { alert('URL을 입력하세요.'); return; }
-    setWebBorrowing(true);
-    try {
-      const session = await api.createWebSession({ url: webUrl, fps: webFps, deviceType: webDeviceType });
-      navigate(`/devices/mirror/${session.id}`);
-    } catch (err: any) {
-      alert(err.message);
-    } finally {
-      setWebBorrowing(false);
-    }
-  };
-
   // ─── Device categorization ───────────────────
 
   const iosDevices = devices.filter(d => d.platform === 'ios');
@@ -178,7 +158,7 @@ export default function DevicesPage() {
   if (initialLoading) {
     return (
       <div className="p-8 animate-fade-in">
-        <h2 className="text-xl font-bold text-white mb-6">Device Pool</h2>
+        <h2 className="text-xl font-bold text-white mb-6">Devices</h2>
         <div className="space-y-3">
           {[...Array(3)].map((_, i) => (
             <div key={i} className="bg-card rounded-xl border border-border p-5 h-20 animate-shimmer bg-gradient-to-r from-card via-card2 to-card bg-[length:200%_100%]" />
@@ -192,9 +172,9 @@ export default function DevicesPage() {
     <div className="p-8 animate-fade-in">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h2 className="text-xl font-bold text-white">Device Pool</h2>
+          <h2 className="text-xl font-bold text-white">Devices</h2>
           <p className="text-xs text-muted mt-0.5">
-            디바이스를 대여한 후, 세션을 생성하여 미러링/녹화/테스트에 사용할 수 있습니다.
+            디바이스를 대여하고 관리합니다. 녹화는 시나리오 녹화 메뉴에서 진행하세요.
           </p>
         </div>
         <button onClick={() => load(false)} className="flex items-center gap-1.5 text-muted hover:text-white text-sm transition-colors">
@@ -386,58 +366,6 @@ export default function DevicesPage() {
           </div>
         </div>
       )}
-
-      {/* ═══ Web Recording (standalone) ═══ */}
-      <div className="mb-8">
-        <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-          <Globe size={14} className="text-blue-400" /> Web Recording
-        </h3>
-        <div className="bg-card rounded-xl border border-border p-5">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="p-2.5 rounded-lg bg-blue-500/15"><Monitor size={16} className="text-blue-400" /></div>
-            <div className="flex-1">
-              <span className="text-sm font-medium text-white">Browser Session</span>
-              <p className="text-xs text-muted mt-0.5">별도 디바이스 없이 웹 브라우저 세션을 바로 시작합니다.</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-            <div className="md:col-span-2">
-              <label className="block text-xs text-muted mb-1">URL</label>
-              <input type="url" value={webUrl} onChange={(e) => setWebUrl(e.target.value)} placeholder="https://example.com" className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">Device Preset</label>
-              <div className="relative">
-                <select value={webDeviceType} onChange={(e) => setWebDeviceType(e.target.value)} className={`${inputClass} appearance-none pr-8`}>
-                  <option value="desktop">Desktop (1280x800)</option>
-                  <option value="desktop-hd">Desktop HD (1920x1080)</option>
-                  <option value="iphone-14">iPhone 14 (390x844)</option>
-                  <option value="iphone-14-pro-max">iPhone 14 Pro Max (430x932)</option>
-                  <option value="iphone-15-pro">iPhone 15 Pro (393x852)</option>
-                  <option value="pixel-7">Pixel 7 (412x915)</option>
-                  <option value="galaxy-s24">Galaxy S24 (360x800)</option>
-                  <option value="ipad-pro-11">iPad Pro 11 (834x1194)</option>
-                </select>
-                <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs text-muted mb-1">FPS</label>
-              <div className="relative">
-                <select value={webFps} onChange={(e) => setWebFps(Number(e.target.value))} className={`${inputClass} appearance-none pr-8`}>
-                  <option value={1}>1</option><option value={2}>2</option><option value={3}>3</option><option value={5}>5</option>
-                </select>
-                <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none" />
-              </div>
-            </div>
-            <div>
-              <button onClick={handleWebSession} disabled={webBorrowing} className="w-full flex items-center justify-center gap-1.5 bg-blue-500 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-600 transition-colors disabled:opacity-50">
-                <Video size={14} /> {webBorrowing ? 'Starting...' : 'Start Recording'}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* ═══ iOS Devices ═══ */}
       <div className="mb-8">

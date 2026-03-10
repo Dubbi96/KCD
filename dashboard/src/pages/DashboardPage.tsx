@@ -55,7 +55,7 @@ export default function DashboardPage() {
 
   return (
     <div className="p-8 animate-fade-in">
-      <h2 className="text-xl font-bold text-white mb-6">Dashboard</h2>
+      <h2 className="text-xl font-bold text-white mb-6">Overview</h2>
 
       {/* Stats cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
