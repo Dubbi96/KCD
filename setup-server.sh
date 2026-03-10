@@ -181,11 +181,15 @@ check_prereqs
 # ─── Clone sibling repos if needed ──────────────────────────
 clone_if_needed() {
   local dir=$1 repo=$2 name=$3
-  if [ -d "$dir" ]; then
+  if [ -d "$dir/.git" ] || [ -d "$dir/src" ]; then
     log "  $name: 이미 존재 ($dir)"
   else
     log "  $name: GitHub에서 클론 중..."
-    git clone "$repo" "$dir" 2>&1 | tail -2
+    if ! git clone "$repo" "$dir" 2>&1; then
+      err "  $name 클론 실패! 네트워크 또는 권한을 확인하세요."
+      err "  URL: $repo"
+      exit 1
+    fi
     log "  $name: 클론 완료"
   fi
 }
@@ -200,53 +204,117 @@ if [ "${1:-}" != "start" ]; then
 fi
 
 # ─── Start PostgreSQL ───────────────────────────────────────
-start_databases() {
-  sep
-  log "PostgreSQL 시작 중..."
-  sep
-
-  if ! command -v docker &>/dev/null; then
-    warn "Docker 없음 — PostgreSQL이 수동으로 실행 중이어야 합니다:"
-    warn "  KCD: localhost:5432 (DB: katab_orchestrator)"
-    warn "  KCP: localhost:5433 (DB: katab_control_plane)"
-    echo ""
-    return
+setup_postgres_brew() {
+  # macOS: Homebrew PostgreSQL
+  if ! command -v brew &>/dev/null; then
+    err "Homebrew가 설치되어 있지 않습니다."
+    err "설치: /bin/bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""
+    exit 1
   fi
 
-  # Kill stale containers on our ports
-  for port in 5432 5433; do
-    local blocking
-    blocking=$(docker ps --filter "publish=$port" --format "{{.Names}}" 2>/dev/null | head -1)
-    if [ -n "$blocking" ]; then
-      warn "  포트 $port 점유 컨테이너 '$blocking' 중지 중..."
-      docker stop "$blocking" >/dev/null 2>&1 || true
-    fi
-  done
+  if ! brew list postgresql@16 &>/dev/null; then
+    log "  PostgreSQL 16 설치 중 (Homebrew)..."
+    brew install postgresql@16 2>&1 | tail -3
+  fi
 
-  # Start KCD PostgreSQL (port 5432)
-  log "  KCD PostgreSQL (:5432)..."
-  (cd "$KCD_DIR" && docker compose up -d postgres 2>&1 | sed 's/^/    /')
+  # Ensure PostgreSQL is running
+  if ! brew services list | grep postgresql@16 | grep -q started; then
+    log "  PostgreSQL 서비스 시작..."
+    brew services start postgresql@16
+    sleep 3
+  fi
 
-  # Start KCP PostgreSQL (port 5433)
-  log "  KCP PostgreSQL (:5433)..."
-  (cd "$KCP_DIR" && docker compose up -d postgres 2>&1 | sed 's/^/    /')
-
-  # Wait for databases
-  echo ""
-  log "데이터베이스 준비 대기 중..."
+  log "  PostgreSQL 실행 확인..."
   local retries=0
-  while ! pg_isready -h localhost -p 5432 -U katab -q 2>/dev/null && [ $retries -lt 15 ]; do
+  while ! pg_isready -h localhost -p 5432 -q 2>/dev/null && [ $retries -lt 10 ]; do
     sleep 2
     retries=$((retries + 1))
   done
 
-  retries=0
-  while ! pg_isready -h localhost -p 5433 -U katab -q 2>/dev/null && [ $retries -lt 15 ]; do
-    sleep 2
-    retries=$((retries + 1))
-  done
+  if ! pg_isready -h localhost -p 5432 -q 2>/dev/null; then
+    err "PostgreSQL이 시작되지 않았습니다."
+    exit 1
+  fi
 
-  log "데이터베이스 준비 완료."
+  # Create user and databases if needed
+  local pg_user
+  pg_user=$(whoami)
+
+  # Create katab role
+  psql -h localhost -p 5432 -U "$pg_user" -d postgres -tc \
+    "SELECT 1 FROM pg_roles WHERE rolname='katab'" 2>/dev/null | grep -q 1 || \
+    psql -h localhost -p 5432 -U "$pg_user" -d postgres -c \
+    "CREATE ROLE katab WITH LOGIN PASSWORD 'katab_secret' CREATEDB;" 2>/dev/null || true
+
+  # Create databases
+  psql -h localhost -p 5432 -U "$pg_user" -d postgres -tc \
+    "SELECT 1 FROM pg_database WHERE datname='katab_orchestrator'" 2>/dev/null | grep -q 1 || \
+    psql -h localhost -p 5432 -U "$pg_user" -d postgres -c \
+    "CREATE DATABASE katab_orchestrator OWNER katab;" 2>/dev/null || true
+
+  psql -h localhost -p 5432 -U "$pg_user" -d postgres -tc \
+    "SELECT 1 FROM pg_database WHERE datname='katab_control_plane'" 2>/dev/null | grep -q 1 || \
+    psql -h localhost -p 5432 -U "$pg_user" -d postgres -c \
+    "CREATE DATABASE katab_control_plane OWNER katab;" 2>/dev/null || true
+
+  log "  데이터베이스 준비 완료 (katab_orchestrator, katab_control_plane)"
+}
+
+start_databases() {
+  sep
+  log "PostgreSQL 준비 중..."
+  sep
+
+  if command -v docker &>/dev/null; then
+    # ── Docker 모드 ──
+    log "  Docker 감지 — 컨테이너로 PostgreSQL 실행"
+
+    # Kill stale containers on our ports
+    for port in 5432 5433; do
+      local blocking
+      blocking=$(docker ps --filter "publish=$port" --format "{{.Names}}" 2>/dev/null | head -1)
+      if [ -n "$blocking" ]; then
+        warn "  포트 $port 점유 컨테이너 '$blocking' 중지 중..."
+        docker stop "$blocking" >/dev/null 2>&1 || true
+      fi
+    done
+
+    log "  KCD PostgreSQL (:5432)..."
+    (cd "$KCD_DIR" && docker compose up -d postgres 2>&1 | sed 's/^/    /')
+
+    log "  KCP PostgreSQL (:5433)..."
+    (cd "$KCP_DIR" && docker compose up -d postgres 2>&1 | sed 's/^/    /')
+
+    echo ""
+    log "데이터베이스 준비 대기 중..."
+    local retries=0
+    while ! pg_isready -h localhost -p 5432 -U katab -q 2>/dev/null && [ $retries -lt 15 ]; do
+      sleep 2; retries=$((retries + 1))
+    done
+    retries=0
+    while ! pg_isready -h localhost -p 5433 -U katab -q 2>/dev/null && [ $retries -lt 15 ]; do
+      sleep 2; retries=$((retries + 1))
+    done
+    log "데이터베이스 준비 완료."
+
+  elif [ "$(uname)" = "Darwin" ]; then
+    # ── macOS: Homebrew PostgreSQL ──
+    log "  Docker 없음 — Homebrew PostgreSQL 사용"
+    setup_postgres_brew
+
+  elif pg_isready -h localhost -p 5432 -q 2>/dev/null; then
+    # ── 기존 PostgreSQL 사용 ──
+    log "  기존 PostgreSQL 감지 (:5432)"
+    warn "  katab_orchestrator, katab_control_plane 데이터베이스가 있는지 확인하세요."
+
+  else
+    err "PostgreSQL을 찾을 수 없습니다."
+    err "다음 중 하나를 설치하세요:"
+    err "  • Docker: https://docs.docker.com/get-docker/"
+    err "  • macOS: brew install postgresql@16"
+    err "  • Linux: sudo apt install postgresql"
+    exit 1
+  fi
   echo ""
 }
 start_databases
@@ -295,11 +363,18 @@ generate_env() {
   local jwt_secret
   jwt_secret=$(openssl rand -hex 32 2>/dev/null || echo "katab-jwt-$(date +%s)")
 
+  # Docker uses separate postgres containers (5432 + 5433)
+  # Homebrew/native uses single postgres (both on 5432)
+  local kcp_db_port=5432
+  if command -v docker &>/dev/null; then
+    kcp_db_port=5433
+  fi
+
   if [ ! -f "$KCP_DIR/.env" ]; then
     log "KCP .env 생성 중..."
     cat > "$KCP_DIR/.env" << ENVEOF
 DB_HOST=localhost
-DB_PORT=5433
+DB_PORT=$kcp_db_port
 DB_USERNAME=katab
 DB_PASSWORD=katab_secret
 DB_DATABASE=katab_control_plane
